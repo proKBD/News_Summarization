@@ -13,6 +13,7 @@ import re
 from datetime import datetime, timedelta
 import time
 import json
+from googletrans import Translator
 
 class NewsExtractor:
     def __init__(self):
@@ -459,14 +460,47 @@ class SentimentAnalyzer:
 class TextToSpeechConverter:
     def __init__(self):
         self.output_dir = AUDIO_OUTPUT_DIR
+        self.translator = Translator()
         os.makedirs(self.output_dir, exist_ok=True)
     
     def generate_audio(self, text: str, filename: str) -> str:
         """Convert text to Hindi speech and save as audio file."""
-        tts = gTTS(text=text, lang=DEFAULT_LANG)
-        output_path = os.path.join(self.output_dir, f"{filename}.mp3")
-        tts.save(output_path)
-        return output_path
+        try:
+            print(f"Translating text to Hindi: {text[:100]}...")
+            
+            # First translate the text to Hindi
+            # Use chunking for long text to avoid translation limits
+            chunks = []
+            for i in range(0, len(text), 1000):
+                chunk = text[i:i+1000]
+                try:
+                    translated_chunk = self.translator.translate(chunk, dest='hi').text
+                    chunks.append(translated_chunk)
+                    print(f"Translated chunk {i//1000 + 1}")
+                except Exception as e:
+                    print(f"Error translating chunk {i//1000 + 1}: {str(e)}")
+                    # If translation fails, use original text
+                    chunks.append(chunk)
+            
+            hindi_text = ' '.join(chunks)
+            print(f"Translation complete. Hindi text length: {len(hindi_text)}")
+            
+            # Generate Hindi speech
+            print("Generating Hindi speech...")
+            tts = gTTS(text=hindi_text, lang='hi', slow=False)
+            output_path = os.path.join(self.output_dir, f"{filename}.mp3")
+            tts.save(output_path)
+            print(f"Audio saved to {output_path}")
+            
+            return output_path
+        except Exception as e:
+            print(f"Error in TTS conversion: {str(e)}")
+            # Fallback to original text if translation fails
+            print("Using fallback English TTS")
+            tts = gTTS(text=text, lang='en')
+            output_path = os.path.join(self.output_dir, f"{filename}.mp3")
+            tts.save(output_path)
+            return output_path
 
 class ComparativeAnalyzer:
     def analyze_coverage(self, articles: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -476,30 +510,32 @@ class ComparativeAnalyzer:
                 "sentiment_distribution": {},
                 "common_topics": [],
                 "source_distribution": {},
-                "final_sentiment": "No articles found"
+                "coverage_differences": [],
+                "final_sentiment": "No articles found for analysis.",
+                "total_articles": 0
             }
 
-        # Analyze sentiment distribution
+        # Calculate sentiment distribution
         sentiment_dist = self._get_sentiment_distribution(articles)
         
-        # Analyze topics
-        topics = self._analyze_topics(articles)
+        # Get topic analysis
+        topic_analysis = self._analyze_topics(articles)
         
-        # Analyze sources
+        # Get source distribution
         source_dist = {}
         for article in articles:
             source = article.get('source', 'Unknown')
             source_dist[source] = source_dist.get(source, 0) + 1
             
         # Get final sentiment analysis
-        final_sentiment = self._get_final_sentiment(sentiment_dist)
+        final_sentiment = self._get_final_sentiment(sentiment_dist, articles)
         
         # Compare article differences
         coverage_diff = self._analyze_coverage_differences(articles)
         
         return {
             "sentiment_distribution": sentiment_dist,
-            "common_topics": topics[:5],  # Top 5 topics
+            "common_topics": topic_analysis,
             "source_distribution": source_dist,
             "coverage_differences": coverage_diff,
             "final_sentiment": final_sentiment,
@@ -508,90 +544,134 @@ class ComparativeAnalyzer:
 
     def _get_sentiment_distribution(self, articles: List[Dict[str, Any]]) -> Dict[str, int]:
         """Calculate distribution of sentiments across articles."""
-        distribution = {"positive": 0, "negative": 0, "neutral": 0}
-        
+        distribution = {'positive': 0, 'negative': 0, 'neutral': 0}
         for article in articles:
-            sentiment = article.get('sentiment', 'neutral')
+            sentiment = article.get('sentiment', 'neutral').lower()
             distribution[sentiment] = distribution.get(sentiment, 0) + 1
-            
         return distribution
 
     def _analyze_topics(self, articles: List[Dict[str, Any]]) -> List[str]:
         """Analyze common topics across articles using TF-IDF."""
-        # Combine title and content for better topic extraction
-        texts = [f"{article.get('title', '')} {article.get('content', '')}" for article in articles]
-        
-        # Create and fit TF-IDF
-        vectorizer = TfidfVectorizer(
-            max_features=10,
-            stop_words='english',
-            ngram_range=(1, 2)
-        )
-        
         try:
-            tfidf_matrix = vectorizer.fit_transform(texts)
+            # Combine title and content for better topic extraction
+            texts = [f"{article.get('title', '')} {article.get('content', '')}" for article in articles]
+            
+            # Create and fit TF-IDF
+            vectorizer = TfidfVectorizer(
+                max_features=10,
+                stop_words='english',
+                ngram_range=(1, 2),
+                token_pattern=r'(?u)\b[A-Za-z][A-Za-z+\'-]*[A-Za-z]+\b'  # Improved pattern
+            )
+            
+            # Clean and normalize texts
+            cleaned_texts = []
+            for text in texts:
+                # Remove numbers and special characters
+                cleaned = re.sub(r'\d+', '', text)
+                cleaned = re.sub(r'[^\w\s]', ' ', cleaned)
+                cleaned_texts.append(cleaned.lower())
+            
+            tfidf_matrix = vectorizer.fit_transform(cleaned_texts)
             feature_names = vectorizer.get_feature_names_out()
             
             # Get average TF-IDF scores for each term
             avg_scores = tfidf_matrix.mean(axis=0).A1
             
-            # Sort terms by score and return top terms
-            top_indices = avg_scores.argsort()[-10:][::-1]
-            return [feature_names[i] for i in top_indices]
-        except:
+            # Sort terms by score and return top meaningful terms
+            sorted_indices = avg_scores.argsort()[::-1]
+            meaningful_topics = []
+            
+            for idx in sorted_indices:
+                topic = feature_names[idx]
+                # Filter out single characters and common words
+                if len(topic) > 1 and topic not in {'000', 'com', 'said', 'says', 'year', 'new', 'one'}:
+                    meaningful_topics.append(topic)
+                if len(meaningful_topics) >= 5:
+                    break
+            
+            return meaningful_topics
+            
+        except Exception as e:
+            print(f"Error analyzing topics: {str(e)}")
             return []
 
     def _analyze_coverage_differences(self, articles: List[Dict[str, Any]]) -> List[str]:
         """Analyze how coverage differs across articles."""
+        if not articles:
+            return ["No articles available for comparison"]
+        
         differences = []
         
-        if len(articles) < 2:
-            return ["Not enough articles for comparison"]
-            
         # Compare sentiment differences
-        sentiments = [article.get('sentiment', 'neutral') for article in articles]
-        if len(set(sentiments)) > 1:
-            differences.append("Articles show varying sentiments about the company")
+        sentiments = [article.get('sentiment', 'neutral').lower() for article in articles]
+        unique_sentiments = set(sentiments)
+        if len(unique_sentiments) > 1:
+            differences.append(f"Coverage shows varied sentiments: {', '.join(unique_sentiments)}")
             
         # Compare source differences
         sources = [article.get('source', 'Unknown') for article in articles]
         if len(set(sources)) > 1:
-            differences.append(f"Coverage from {len(set(sources))} different sources")
+            differences.append(f"Coverage from {len(set(sources))} different news sources")
             
-        # Compare publication dates
+        # Compare publication dates if available
         dates = []
         for article in articles:
-            try:
-                date_str = article.get('published_at', '')
-                if date_str:
-                    date = datetime.strptime(date_str, "%a, %d %b %Y %H:%M:%S %z")
-                    dates.append(date)
-            except:
-                continue
-                
+            if 'date' in article:
+                try:
+                    dates.append(article['date'])
+                except:
+                    continue
+        
         if dates:
-            date_range = max(dates) - min(dates)
-            if date_range > timedelta(days=1):
-                differences.append(f"Coverage spans {date_range.days} days")
-                
+            date_range = f"{min(dates)} to {max(dates)}"
+            differences.append(f"Articles span from {date_range}")
+        
         return differences
 
-    def _get_final_sentiment(self, distribution: Dict[str, int]) -> str:
-        """Generate final sentiment analysis based on distribution."""
+    def _get_final_sentiment(self, distribution: Dict[str, int], articles: List[Dict[str, Any]]) -> str:
+        """Generate final sentiment analysis based on distribution and article content."""
+        if not articles:
+            return "No articles available for analysis."
+            
         total = sum(distribution.values())
         if total == 0:
-            return "No sentiment data available"
+            return "No sentiment analysis available."
             
-        pos_ratio = distribution.get('positive', 0) / total
-        neg_ratio = distribution.get('negative', 0) / total
+        # Calculate sentiment percentages
+        sentiment_percentages = {k: (v / total) * 100 for k, v in distribution.items()}
+        dominant_sentiment = max(sentiment_percentages.items(), key=lambda x: x[1])[0]
         
-        if pos_ratio > 0.6:
-            return "Strongly Positive"
-        elif pos_ratio > 0.4:
-            return "Moderately Positive"
-        elif neg_ratio > 0.6:
-            return "Strongly Negative"
-        elif neg_ratio > 0.4:
-            return "Moderately Negative"
+        # Get key topics and sources
+        topics = set()
+        sources = set()
+        for article in articles:
+            if 'topics' in article:
+                topics.update(article['topics'])
+            if 'source' in article:
+                sources.add(article['source'])
+        
+        # Generate dynamic summary
+        summary_parts = []
+        
+        # Sentiment distribution summary
+        sentiment_desc = f"Based on analysis of {total} articles from {len(sources)} different sources, "
+        if sentiment_percentages[dominant_sentiment] > 60:
+            sentiment_desc += f"there is a strong {dominant_sentiment} sentiment ({sentiment_percentages[dominant_sentiment]:.1f}% of articles)"
         else:
-            return "Neutral or Mixed"
+            sentiment_desc += f"the overall sentiment leans {dominant_sentiment}"
+        summary_parts.append(sentiment_desc + ".")
+        
+        # Market impact and trend analysis
+        positive_ratio = sentiment_percentages.get('positive', 0)
+        negative_ratio = sentiment_percentages.get('negative', 0)
+        neutral_ratio = sentiment_percentages.get('neutral', 0)
+        
+        if positive_ratio > negative_ratio + 20:
+            summary_parts.append(f"Recent coverage indicates strong market confidence, with {positive_ratio:.1f}% positive articles discussing key developments and growth prospects.")
+        elif negative_ratio > positive_ratio + 20:
+            summary_parts.append(f"Market sentiment shows concerns, with {negative_ratio:.1f}% negative coverage highlighting potential challenges and risks.")
+        else:
+            summary_parts.append(f"The market shows balanced perspectives with mixed coverage ({positive_ratio:.1f}% positive, {negative_ratio:.1f}% negative, {neutral_ratio:.1f}% neutral).")
+        
+        return " ".join(summary_parts)
