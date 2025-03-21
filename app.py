@@ -82,6 +82,35 @@ def main():
                                         if "confidence" in fine_grained:
                                             st.write("**Confidence:**", f"{fine_grained['confidence']*100:.1f}%")
                             
+                            # Display sentiment indices if available
+                            if "sentiment_indices" in article and article["sentiment_indices"]:
+                                st.markdown("**Sentiment Indices:**")
+                                indices = article["sentiment_indices"]
+                                
+                                # Create columns for displaying indices
+                                idx_cols = st.columns(3)
+                                
+                                # Display positivity and negativity in first column
+                                with idx_cols[0]:
+                                    if "positivity_index" in indices:
+                                        st.markdown(f"**Positivity:** {indices['positivity_index']:.2f}")
+                                    if "negativity_index" in indices:
+                                        st.markdown(f"**Negativity:** {indices['negativity_index']:.2f}")
+                                
+                                # Display emotional intensity and controversy in second column
+                                with idx_cols[1]:
+                                    if "emotional_intensity" in indices:
+                                        st.markdown(f"**Emotional Intensity:** {indices['emotional_intensity']:.2f}")
+                                    if "controversy_score" in indices:
+                                        st.markdown(f"**Controversy:** {indices['controversy_score']:.2f}")
+                                
+                                # Display confidence and ESG in third column
+                                with idx_cols[2]:
+                                    if "confidence_score" in indices:
+                                        st.markdown(f"**Confidence:** {indices['confidence_score']:.2f}")
+                                    if "esg_relevance" in indices:
+                                        st.markdown(f"**ESG Relevance:** {indices['esg_relevance']:.2f}")
+                            
                             # Display entities if available
                             if "entities" in article and article["entities"]:
                                 st.markdown("**Named Entities:**")
@@ -188,6 +217,83 @@ def main():
                             with metrics_col2:
                                 if "volatility" in analysis["sentiment_distribution"]:
                                     st.metric("Sentiment Volatility", f"{analysis['sentiment_distribution']['volatility']:.2f}")
+                            
+                            # Display sentiment indices if available
+                            if "sentiment_indices" in analysis and analysis["sentiment_indices"]:
+                                st.subheader("Sentiment Indices")
+                                indices = analysis["sentiment_indices"]
+                                
+                                # Create a DataFrame for the indices
+                                indices_data = {
+                                    "Index": [],
+                                    "Value": [],
+                                    "Description": []
+                                }
+                                
+                                # Add indices with descriptions
+                                if "positivity_index" in indices:
+                                    indices_data["Index"].append("Positivity Index")
+                                    indices_data["Value"].append(indices["positivity_index"])
+                                    indices_data["Description"].append("Measures the degree of positive sentiment (0-1)")
+                                
+                                if "negativity_index" in indices:
+                                    indices_data["Index"].append("Negativity Index")
+                                    indices_data["Value"].append(indices["negativity_index"])
+                                    indices_data["Description"].append("Measures the degree of negative sentiment (0-1)")
+                                
+                                if "emotional_intensity" in indices:
+                                    indices_data["Index"].append("Emotional Intensity")
+                                    indices_data["Value"].append(indices["emotional_intensity"])
+                                    indices_data["Description"].append("Measures the strength of emotional content (0-1)")
+                                
+                                if "controversy_score" in indices:
+                                    indices_data["Index"].append("Controversy Score")
+                                    indices_data["Value"].append(indices["controversy_score"])
+                                    indices_data["Description"].append("Indicates conflicting sentiments (0-1)")
+                                
+                                if "confidence_score" in indices:
+                                    indices_data["Index"].append("Confidence Score")
+                                    indices_data["Value"].append(indices["confidence_score"])
+                                    indices_data["Description"].append("Model confidence in sentiment analysis (0-1)")
+                                
+                                if "esg_relevance" in indices:
+                                    indices_data["Index"].append("ESG Relevance")
+                                    indices_data["Value"].append(indices["esg_relevance"])
+                                    indices_data["Description"].append("Relevance to Environmental, Social, Governance topics (0-1)")
+                                
+                                # Create DataFrame and display
+                                indices_df = pd.DataFrame(indices_data)
+                                
+                                # Create a bar chart for the indices
+                                if not indices_df.empty:
+                                    # Create color mapping for indices
+                                    colors = []
+                                    for idx in indices_df["Index"]:
+                                        if "Positivity" in idx:
+                                            colors.append("green")
+                                        elif "Negativity" in idx or "Controversy" in idx:
+                                            colors.append("red")
+                                        elif "ESG" in idx:
+                                            colors.append("blue")
+                                        elif "Emotional" in idx:
+                                            colors.append("purple")
+                                        else:
+                                            colors.append("gray")
+                                    
+                                    # Create a bar chart
+                                    fig = px.bar(
+                                        indices_df,
+                                        x="Index",
+                                        y="Value",
+                                        color="Index",
+                                        color_discrete_sequence=colors,
+                                        title="Sentiment Indices"
+                                    )
+                                    fig.update_layout(xaxis_title="", yaxis_title="Score (0-1)")
+                                    st.plotly_chart(fig)
+                                    
+                                    # Display the table with descriptions
+                                    st.table(indices_df[["Index", "Value", "Description"]])
                         else:
                             # Old format (simple dictionary)
                             dist_df = pd.DataFrame.from_dict(
@@ -244,6 +350,14 @@ def main():
                     st.header("🎯 Final Analysis")
                     if "final_sentiment_analysis" in result:
                         st.write(result["final_sentiment_analysis"])
+                        
+                        # Display sentiment indices in the sidebar if available
+                        if "sentiment_indices" in analysis and analysis["sentiment_indices"]:
+                            st.sidebar.markdown("### Sentiment Indices")
+                            indices = analysis["sentiment_indices"]
+                            for idx_name, idx_value in indices.items():
+                                formatted_name = " ".join(word.capitalize() for word in idx_name.replace("_", " ").split())
+                                st.sidebar.metric(formatted_name, f"{idx_value:.2f}")
                         
                         # Display ensemble model information if available
                         if "ensemble_info" in result:

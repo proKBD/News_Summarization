@@ -21,6 +21,24 @@ SENTIMENT_MODEL = "yiyanghkust/finbert-tone"  # More advanced financial sentimen
 SENTIMENT_FINE_GRAINED_MODEL = "mrm8488/distilroberta-finetuned-financial-news-sentiment-analysis"
 SUMMARIZATION_MODEL = "t5-base"
 
+# Additional Fine-Grained Sentiment Models
+FINE_GRAINED_MODELS = {
+    "financial": "mrm8488/distilroberta-finetuned-financial-news-sentiment-analysis",
+    "emotion": "j-hartmann/emotion-english-distilroberta-base",
+    "aspect": "yangheng/deberta-v3-base-absa-v1.1",
+    "esg": "yiyanghkust/finbert-esg",
+    "news_tone": "ProsusAI/finbert"
+}
+
+# Fine-Grained Sentiment Categories
+SENTIMENT_CATEGORIES = {
+    "financial": ["positive", "negative", "neutral"],
+    "emotion": ["joy", "sadness", "anger", "fear", "surprise", "disgust", "neutral"],
+    "aspect": ["positive", "negative", "neutral"],
+    "esg": ["environmental", "social", "governance", "neutral"],
+    "news_tone": ["positive", "negative", "neutral"]
+}
+
 # Cache Settings
 CACHE_DIR = ".cache"
 CACHE_EXPIRY = 3600  # 1 hour

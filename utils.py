@@ -342,9 +342,24 @@ class SentimentAnalyzer:
             self.sentiment_pipeline = pipeline("sentiment-analysis", 
                                       model=SENTIMENT_MODEL)
             
-            # Fine-grained sentiment analysis
-            self.fine_grained_sentiment = pipeline("sentiment-analysis",
-                                           model=SENTIMENT_FINE_GRAINED_MODEL)
+            # Initialize fine-grained sentiment models
+            self.fine_grained_models = {}
+            try:
+                # Initialize the default fine-grained model for backward compatibility
+                self.fine_grained_sentiment = pipeline("sentiment-analysis",
+                                               model=SENTIMENT_FINE_GRAINED_MODEL)
+                
+                # Initialize additional fine-grained models
+                for model_name, model_path in FINE_GRAINED_MODELS.items():
+                    try:
+                        print(f"Loading fine-grained model: {model_name}")
+                        self.fine_grained_models[model_name] = pipeline("sentiment-analysis", 
+                                                                model=model_path)
+                    except Exception as e:
+                        print(f"Error loading fine-grained model {model_name}: {str(e)}")
+            except Exception as e:
+                print(f"Error initializing fine-grained models: {str(e)}")
+                self.fine_grained_sentiment = None
             
             # Initialize additional sentiment analyzers if available
             self.has_textblob = False
@@ -383,6 +398,7 @@ class SentimentAnalyzer:
             # Fallback to default models if specific models fail
             self.sentiment_pipeline = pipeline("sentiment-analysis")
             self.fine_grained_sentiment = None
+            self.fine_grained_models = {}
             self.summarizer = pipeline("summarization")
             self.vectorizer = TfidfVectorizer(stop_words='english', max_features=10)
             self.has_ner = False
@@ -426,6 +442,7 @@ class SentimentAnalyzer:
                 'topics': topics,
                 'entities': entities,
                 'sentiment_targets': sentiment_targets,
+                'sentiment_indices': fine_grained_sentiment.get('indices', {}),
                 'analysis_timestamp': datetime.now().isoformat()
             })
             
@@ -443,6 +460,14 @@ class SentimentAnalyzer:
                 'topics': [],
                 'entities': {},
                 'sentiment_targets': [],
+                'sentiment_indices': {
+                    'positivity_index': 0.5,
+                    'negativity_index': 0.5,
+                    'emotional_intensity': 0.0,
+                    'controversy_score': 0.0,
+                    'confidence_score': 0.0,
+                    'esg_relevance': 0.0
+                },
                 'analysis_timestamp': datetime.now().isoformat()
             })
             return article
@@ -592,50 +617,187 @@ class SentimentAnalyzer:
 
     def _get_fine_grained_sentiment(self, text: str) -> Dict[str, Any]:
         """Get fine-grained sentiment analysis with more detailed categories."""
-        if not self.fine_grained_sentiment:
-            return {"category": "unknown", "confidence": 0.0}
+        # Initialize result structure
+        result = {
+            "primary": {"category": "unknown", "confidence": 0.0},
+            "models": {}
+        }
+        
+        # Check if we have any fine-grained models
+        if not self.fine_grained_sentiment and not self.fine_grained_models:
+            return result
             
         try:
             # Split text into manageable chunks if too long
             chunks = self._split_text(text)
-            results = []
             
-            for chunk in chunks:
-                if not chunk.strip():
-                    continue
-                result = self.fine_grained_sentiment(chunk)[0]
-                results.append(result)
-            
-            if not results:
-                return {"category": "unknown", "confidence": 0.0}
+            # Process with default fine-grained model for backward compatibility
+            if self.fine_grained_sentiment:
+                primary_results = []
                 
-            # Aggregate results from all chunks
-            categories = {}
-            for result in results:
-                label = result['label'].lower()
-                score = result['score']
-                if label in categories:
-                    categories[label] += score
-                else:
-                    categories[label] = score
+                for chunk in chunks:
+                    if not chunk.strip():
+                        continue
+                    chunk_result = self.fine_grained_sentiment(chunk)[0]
+                    primary_results.append(chunk_result)
+                
+                if primary_results:
+                    # Aggregate results from all chunks
+                    categories = {}
+                    for res in primary_results:
+                        label = res['label'].lower()
+                        score = res['score']
+                        if label in categories:
+                            categories[label] += score
+                        else:
+                            categories[label] = score
+                    
+                    # Normalize scores
+                    total = sum(categories.values())
+                    if total > 0:
+                        categories = {k: round(v/total, 3) for k, v in categories.items()}
+                    
+                    # Get dominant category
+                    dominant_category = max(categories.items(), key=lambda x: x[1])
+                    
+                    result["primary"] = {
+                        "category": dominant_category[0],
+                        "confidence": dominant_category[1],
+                        "distribution": categories
+                    }
             
-            # Normalize scores
-            total = sum(categories.values())
-            if total > 0:
-                categories = {k: round(v/total, 3) for k, v in categories.items()}
+            # Process with additional fine-grained models
+            for model_name, model in self.fine_grained_models.items():
+                model_results = []
+                
+                for chunk in chunks:
+                    if not chunk.strip():
+                        continue
+                    try:
+                        chunk_result = model(chunk)[0]
+                        model_results.append(chunk_result)
+                    except Exception as e:
+                        print(f"Error analyzing chunk with model {model_name}: {str(e)}")
+                
+                if model_results:
+                    # Aggregate results from all chunks
+                    categories = {}
+                    for res in model_results:
+                        # Ensure the label is lowercase for consistency
+                        label = res['label'].lower() if isinstance(res.get('label'), str) else "unknown"
+                        score = res['score']
+                        if label in categories:
+                            categories[label] += score
+                        else:
+                            categories[label] = score
+                    
+                    # Normalize scores
+                    total = sum(categories.values())
+                    if total > 0:
+                        categories = {k: round(v/total, 3) for k, v in categories.items()}
+                    
+                    # Get dominant category
+                    dominant_category = max(categories.items(), key=lambda x: x[1])
+                    
+                    # Store results for this model
+                    result["models"][model_name] = {
+                        "category": dominant_category[0],
+                        "confidence": dominant_category[1],
+                        "distribution": categories
+                    }
             
-            # Get dominant category
-            dominant_category = max(categories.items(), key=lambda x: x[1])
+            # Calculate sentiment indices based on the fine-grained results
+            result["indices"] = self._calculate_sentiment_indices(result)
             
-            return {
-                "category": dominant_category[0],
-                "confidence": dominant_category[1],
-                "distribution": categories
-            }
+            return result
             
         except Exception as e:
             print(f"Error in fine-grained sentiment analysis: {str(e)}")
-            return {"category": "unknown", "confidence": 0.0}
+            return result
+    
+    def _calculate_sentiment_indices(self, fine_grained_results: Dict[str, Any]) -> Dict[str, float]:
+        """Calculate various sentiment indices based on fine-grained sentiment analysis."""
+        indices = {
+            "positivity_index": 0.5,  # Default neutral value
+            "negativity_index": 0.5,
+            "emotional_intensity": 0.0,
+            "controversy_score": 0.0,
+            "confidence_score": 0.0,
+            "esg_relevance": 0.0
+        }
+        
+        try:
+            # Extract distributions from all models
+            distributions = {}
+            confidence_scores = {}
+            
+            # Add primary model if available
+            if "category" in fine_grained_results.get("primary", {}):
+                if "distribution" in fine_grained_results["primary"]:
+                    distributions["primary"] = fine_grained_results["primary"]["distribution"]
+                confidence_scores["primary"] = fine_grained_results["primary"].get("confidence", 0.0)
+            
+            # Add other models
+            for model_name, model_result in fine_grained_results.get("models", {}).items():
+                if "distribution" in model_result:
+                    distributions[model_name] = model_result["distribution"]
+                confidence_scores[model_name] = model_result.get("confidence", 0.0)
+            
+            # Calculate positivity index
+            positive_scores = []
+            for model_name, dist in distributions.items():
+                if model_name == "financial" or model_name == "primary" or model_name == "news_tone" or model_name == "aspect":
+                    pos_score = dist.get("positive", 0.0)
+                    positive_scores.append(pos_score)
+                elif model_name == "emotion":
+                    # For emotion model, consider joy as positive
+                    pos_score = dist.get("joy", 0.0) + dist.get("surprise", 0.0) * 0.5
+                    positive_scores.append(pos_score)
+            
+            if positive_scores:
+                indices["positivity_index"] = round(sum(positive_scores) / len(positive_scores), 3)
+            
+            # Calculate negativity index
+            negative_scores = []
+            for model_name, dist in distributions.items():
+                if model_name == "financial" or model_name == "primary" or model_name == "news_tone" or model_name == "aspect":
+                    neg_score = dist.get("negative", 0.0)
+                    negative_scores.append(neg_score)
+                elif model_name == "emotion":
+                    # For emotion model, consider sadness, anger, fear, disgust as negative
+                    neg_score = dist.get("sadness", 0.0) + dist.get("anger", 0.0) + \
+                                dist.get("fear", 0.0) + dist.get("disgust", 0.0)
+                    negative_scores.append(neg_score / 4)  # Average of 4 negative emotions
+            
+            if negative_scores:
+                indices["negativity_index"] = round(sum(negative_scores) / len(negative_scores), 3)
+            
+            # Calculate emotional intensity
+            emotion_dist = distributions.get("emotion", {})
+            if emotion_dist:
+                # Sum all emotional intensities except neutral
+                emotional_sum = sum(v for k, v in emotion_dist.items() if k != "neutral")
+                indices["emotional_intensity"] = round(emotional_sum, 3)
+            
+            # Calculate controversy score (high when both positive and negative are high)
+            indices["controversy_score"] = round(indices["positivity_index"] * indices["negativity_index"] * 4, 3)
+            
+            # Calculate confidence score (average of all model confidences)
+            if confidence_scores:
+                indices["confidence_score"] = round(sum(confidence_scores.values()) / len(confidence_scores), 3)
+            
+            # Calculate ESG relevance if available
+            esg_dist = distributions.get("esg", {})
+            if esg_dist:
+                # Sum of all ESG categories
+                esg_sum = sum(v for k, v in esg_dist.items() if k in ["environmental", "social", "governance"])
+                indices["esg_relevance"] = round(esg_sum, 3)
+            
+            return indices
+            
+        except Exception as e:
+            print(f"Error calculating sentiment indices: {str(e)}")
+            return indices
 
     def summarize_text(self, text: str) -> str:
         """Generate a concise summary of the text."""
@@ -855,7 +1017,8 @@ class ComparativeAnalyzer:
                 "sentiment_distribution": {},
                 "coverage_differences": ["No articles found for analysis."],
                 "final_sentiment": "No articles found for analysis.",
-                "total_articles": 0
+                "total_articles": 0,
+                "sentiment_indices": {}
             }
         
         # Add company name to each article if provided
@@ -880,9 +1043,10 @@ class ComparativeAnalyzer:
             "sentiment_distribution": sentiment_dist,
             "coverage_differences": differences,
             "final_sentiment": final_sentiment,
-            "total_articles": len(articles)
+            "total_articles": len(articles),
+            "sentiment_indices": sentiment_dist.get("sentiment_indices", {})
         }
-    
+
     def _get_sentiment_distribution(self, articles: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate distribution of sentiments across articles."""
         # Basic sentiment distribution
@@ -894,11 +1058,22 @@ class ComparativeAnalyzer:
         # Sentiment scores
         sentiment_scores = []
         
+        # Sentiment indices aggregation
+        sentiment_indices = {
+            "positivity_index": [],
+            "negativity_index": [],
+            "emotional_intensity": [],
+            "controversy_score": [],
+            "confidence_score": [],
+            "esg_relevance": []
+        }
+        
         # Process each article
         for article in articles:
             # Basic sentiment
             sentiment = article.get('sentiment', 'neutral').lower()
-            basic_distribution[sentiment] = basic_distribution.get(sentiment, 0) + 1
+            if isinstance(sentiment, str):
+                basic_distribution[sentiment] = basic_distribution.get(sentiment, 0) + 1
             
             # Sentiment score
             score = article.get('sentiment_score', 0.0)
@@ -907,8 +1082,14 @@ class ComparativeAnalyzer:
             # Fine-grained sentiment
             fine_grained = article.get('fine_grained_sentiment', {})
             if fine_grained and 'category' in fine_grained:
-                category = fine_grained['category'].lower()
+                category = fine_grained['category'].lower() if isinstance(fine_grained['category'], str) else "unknown"
                 fine_grained_distribution[category] = fine_grained_distribution.get(category, 0) + 1
+            
+            # Collect sentiment indices
+            indices = article.get('sentiment_indices', {})
+            for index_name, index_values in sentiment_indices.items():
+                if index_name in indices:
+                    index_values.append(indices[index_name])
         
         # Calculate average sentiment score
         avg_sentiment_score = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0
@@ -918,13 +1099,22 @@ class ComparativeAnalyzer:
         if len(sentiment_scores) > 1:
             sentiment_volatility = statistics.stdev(sentiment_scores)
         
+        # Calculate average sentiment indices
+        avg_indices = {}
+        for index_name, values in sentiment_indices.items():
+            if values:
+                avg_indices[index_name] = round(sum(values) / len(values), 3)
+            else:
+                avg_indices[index_name] = 0.0
+        
         return {
             "basic": basic_distribution,
             "fine_grained": fine_grained_distribution,
             "avg_score": round(avg_sentiment_score, 3),
-            "volatility": round(sentiment_volatility, 3)
+            "volatility": round(sentiment_volatility, 3),
+            "sentiment_indices": avg_indices
         }
-
+    
     def _analyze_topics(self, articles: List[Dict[str, Any]]) -> List[str]:
         """Analyze common topics across articles using TF-IDF."""
         try:
@@ -954,7 +1144,7 @@ class ComparativeAnalyzer:
             avg_scores = tfidf_matrix.mean(axis=0).A1
             
             # Sort terms by score and return top meaningful terms
-            sorted_indices = avg_scores.argsort()[::-1]
+            sorted_indices = avg_scores.argsort()[-5:][::-1]
             meaningful_topics = []
             
             for idx in sorted_indices:
@@ -982,108 +1172,158 @@ class ComparativeAnalyzer:
         sentiments = [article.get('sentiment', 'neutral').lower() for article in articles]
         unique_sentiments = set(sentiments)
         if len(unique_sentiments) > 1:
-            differences.append(f"Coverage shows varied sentiments: {', '.join(unique_sentiments)}")
+            pos_count = sentiments.count('positive')
+            neg_count = sentiments.count('negative')
+            neu_count = sentiments.count('neutral')
             
-        # Compare source differences
-        sources = [article.get('source', 'Unknown') for article in articles]
-        if len(set(sources)) > 1:
-            differences.append(f"Coverage from {len(set(sources))} different news sources")
-            
-        # Compare publication dates if available
-        dates = []
-        for article in articles:
-            if 'date' in article:
-                try:
-                    dates.append(article['date'])
-                except:
-                    continue
+            if pos_count > 0 and neg_count > 0:
+                differences.append(f"Coverage sentiment varies significantly: {pos_count} positive, {neg_count} negative, and {neu_count} neutral articles.")
         
-        if dates:
-            date_range = f"{min(dates)} to {max(dates)}"
-            differences.append(f"Articles span from {date_range}")
+        # Compare fine-grained sentiment differences
+        fine_grained_categories = []
+        for article in articles:
+            fine_grained = article.get('fine_grained_sentiment', {})
+            if isinstance(fine_grained, dict) and 'category' in fine_grained:
+                category = fine_grained['category']
+                if isinstance(category, str):
+                    fine_grained_categories.append(category.lower())
+        
+        unique_categories = set(fine_grained_categories)
+        if len(unique_categories) > 2:  # More than 2 different categories
+            category_counts = {}
+            for category in fine_grained_categories:
+                category_counts[category] = category_counts.get(category, 0) + 1
+            
+            top_categories = sorted(category_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            categories_str = ", ".join([f"{cat} ({count})" for cat, count in top_categories])
+            differences.append(f"Articles show diverse sentiment categories: {categories_str}")
+        
+        # Compare sentiment indices
+        indices_differences = []
+        positivity_values = []
+        negativity_values = []
+        controversy_values = []
+        
+        for article in articles:
+            indices = article.get('sentiment_indices', {})
+            if indices:
+                if 'positivity_index' in indices:
+                    positivity_values.append(indices['positivity_index'])
+                if 'negativity_index' in indices:
+                    negativity_values.append(indices['negativity_index'])
+                if 'controversy_score' in indices:
+                    controversy_values.append(indices['controversy_score'])
+        
+        # Check for high variance in positivity
+        if positivity_values and len(positivity_values) > 1:
+            if max(positivity_values) - min(positivity_values) > 0.4:
+                indices_differences.append("Articles show significant variation in positivity levels")
+        
+        # Check for high variance in negativity
+        if negativity_values and len(negativity_values) > 1:
+            if max(negativity_values) - min(negativity_values) > 0.4:
+                indices_differences.append("Articles show significant variation in negativity levels")
+        
+        # Check for high controversy scores
+        if controversy_values:
+            high_controversy = [v for v in controversy_values if v > 0.5]
+            if high_controversy:
+                indices_differences.append(f"{len(high_controversy)} articles show high controversy scores")
+        
+        if indices_differences:
+            differences.append("Sentiment index analysis: " + "; ".join(indices_differences))
+        
+        # Compare source differences
+        sources = [article.get('source', '').lower() for article in articles]
+        source_counts = {}
+        for source in sources:
+            if source:
+                source_counts[source] = source_counts.get(source, 0) + 1
+        
+        if len(source_counts) > 1:
+            top_sources = sorted(source_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            sources_str = ", ".join([f"{source} ({count})" for source, count in top_sources])
+            differences.append(f"Coverage spans multiple sources: {sources_str}")
+        
+        # If no significant differences found
+        if not differences:
+            differences.append("Coverage is relatively consistent across articles")
         
         return differences
 
     def _get_final_sentiment(self, distribution: Dict[str, Any], articles: List[Dict[str, Any]]) -> str:
         """Generate final sentiment analysis based on distribution and article content."""
-        if not articles:
-            return "No articles available for analysis."
+        try:
+            # Get basic sentiment counts
+            basic_dist = distribution.get('basic', {})
+            positive_count = basic_dist.get('positive', 0)
+            negative_count = basic_dist.get('negative', 0)
+            neutral_count = basic_dist.get('neutral', 0)
             
-        total = sum(distribution["basic"].values())
-        if total == 0:
-            return "No sentiment analysis available."
+            total_articles = positive_count + negative_count + neutral_count
             
-        # Calculate sentiment percentages
-        sentiment_percentages = {k: (v / total) * 100 for k, v in distribution["basic"].items()}
-        dominant_sentiment = max(sentiment_percentages.items(), key=lambda x: x[1])[0]
-        
-        # Get key topics and sources
-        topics = set()
-        sources = set()
-        for article in articles:
-            if 'topics' in article:
-                topics.update(article['topics'])
-            if 'source' in article:
-                sources.add(article['source'])
-        
-        # Generate dynamic summary
-        summary_parts = []
-        
-        # Sentiment distribution summary
-        sentiment_desc = f"Based on analysis of {total} articles from {len(sources)} different sources, "
-        if sentiment_percentages[dominant_sentiment] > 60:
-            sentiment_desc += f"there is a strong {dominant_sentiment} sentiment ({sentiment_percentages[dominant_sentiment]:.1f}% of articles)"
-        else:
-            sentiment_desc += f"the overall sentiment leans {dominant_sentiment}"
-        summary_parts.append(sentiment_desc + ".")
-        
-        # Add sentiment volatility insights
-        volatility = distribution.get("volatility", 0)
-        if volatility > 0.3:
-            summary_parts.append(f"High sentiment volatility ({volatility:.2f}) indicates significant disagreement among sources about the company's outlook.")
-        elif volatility > 0.15:
-            summary_parts.append(f"Moderate sentiment volatility ({volatility:.2f}) suggests some disagreement among news sources.")
-        else:
-            summary_parts.append(f"Low sentiment volatility ({volatility:.2f}) indicates consistent reporting across sources.")
-        
-        # Add fine-grained sentiment insights
-        fine_grained = distribution.get("fine_grained", {})
-        if fine_grained:
-            # Get the top 2 fine-grained sentiments
-            sorted_sentiments = sorted(fine_grained.items(), key=lambda x: x[1], reverse=True)[:2]
-            if len(sorted_sentiments) > 0:
-                top_sentiment = sorted_sentiments[0][0]
-                top_count = sorted_sentiments[0][1]
-                top_percent = (top_count / total) * 100
-                
-                fine_grained_insight = f"Detailed analysis reveals predominant {top_sentiment} sentiment ({top_percent:.1f}%)"
-                
-                if len(sorted_sentiments) > 1:
-                    second_sentiment = sorted_sentiments[1][0]
-                    second_count = sorted_sentiments[1][1]
-                    second_percent = (second_count / total) * 100
-                    fine_grained_insight += f" with secondary {second_sentiment} sentiment ({second_percent:.1f}%)"
-                
-                summary_parts.append(fine_grained_insight + ".")
-        
-        # Market impact and trend analysis
-        positive_ratio = sentiment_percentages.get('positive', 0)
-        negative_ratio = sentiment_percentages.get('negative', 0)
-        neutral_ratio = sentiment_percentages.get('neutral', 0)
-        
-        if positive_ratio > negative_ratio + 20:
-            summary_parts.append(f"Recent coverage indicates strong market confidence, with {positive_ratio:.1f}% positive articles discussing key developments and growth prospects.")
-        elif negative_ratio > positive_ratio + 20:
-            summary_parts.append(f"Market sentiment shows concerns, with {negative_ratio:.1f}% negative coverage highlighting potential challenges and risks.")
-        else:
-            summary_parts.append(f"The market shows balanced perspectives with mixed coverage ({positive_ratio:.1f}% positive, {negative_ratio:.1f}% negative, {neutral_ratio:.1f}% neutral).")
-        
-        # Add average sentiment score insight
-        avg_score = distribution.get("avg_score", 0)
-        if avg_score > 0.8:
-            summary_parts.append(f"The high average sentiment score ({avg_score:.2f}) suggests strong confidence in the company's performance.")
-        elif avg_score < 0.3:
-            summary_parts.append(f"The low average sentiment score ({avg_score:.2f}) indicates significant concerns about the company's outlook.")
-        
-        # Return the combined analysis
-        return " ".join(summary_parts)
+            if total_articles == 0:
+                return "No sentiment data available"
+            
+            # Calculate percentages
+            positive_pct = (positive_count / total_articles) * 100
+            negative_pct = (negative_count / total_articles) * 100
+            neutral_pct = (neutral_count / total_articles) * 100
+            
+            # Get average sentiment score
+            avg_score = distribution.get('avg_score', 0.5)
+            
+            # Get volatility
+            volatility = distribution.get('volatility', 0)
+            
+            # Get sentiment indices
+            indices = distribution.get('sentiment_indices', {})
+            positivity_index = indices.get('positivity_index', 0.5)
+            negativity_index = indices.get('negativity_index', 0.5)
+            emotional_intensity = indices.get('emotional_intensity', 0)
+            controversy_score = indices.get('controversy_score', 0)
+            esg_relevance = indices.get('esg_relevance', 0)
+            
+            # Generate analysis text
+            analysis = []
+            
+            # Overall sentiment
+            if positive_pct > 60:
+                analysis.append(f"Overall sentiment is predominantly positive ({positive_pct:.1f}%).")
+            elif negative_pct > 60:
+                analysis.append(f"Overall sentiment is predominantly negative ({negative_pct:.1f}%).")
+            elif neutral_pct > 60:
+                analysis.append(f"Overall sentiment is predominantly neutral ({neutral_pct:.1f}%).")
+            elif positive_pct > negative_pct and positive_pct > neutral_pct:
+                analysis.append(f"Overall sentiment leans positive ({positive_pct:.1f}%), with some mixed coverage.")
+            elif negative_pct > positive_pct and negative_pct > neutral_pct:
+                analysis.append(f"Overall sentiment leans negative ({negative_pct:.1f}%), with some mixed coverage.")
+            else:
+                analysis.append(f"Sentiment is mixed across sources (Positive: {positive_pct:.1f}%, Negative: {negative_pct:.1f}%, Neutral: {neutral_pct:.1f}%).")
+            
+            # Sentiment indices insights
+            if positivity_index > 0.7:
+                analysis.append(f"High positivity index ({positivity_index:.2f}) indicates strong positive sentiment.")
+            elif positivity_index < 0.3 and negativity_index > 0.7:
+                analysis.append(f"High negativity index ({negativity_index:.2f}) with low positivity suggests strongly negative coverage.")
+            
+            if emotional_intensity > 0.6:
+                analysis.append(f"Coverage shows high emotional intensity ({emotional_intensity:.2f}).")
+            
+            if controversy_score > 0.5:
+                analysis.append(f"Coverage shows significant controversy ({controversy_score:.2f}), with polarized opinions.")
+            
+            if esg_relevance > 0.4:
+                analysis.append(f"Coverage includes significant ESG-related content ({esg_relevance:.2f}).")
+            
+            # Volatility
+            if volatility > 0.2:
+                analysis.append(f"Sentiment varies considerably across articles (volatility: {volatility:.2f}).")
+            else:
+                analysis.append(f"Sentiment is relatively consistent across articles (volatility: {volatility:.2f}).")
+            
+            return " ".join(analysis)
+            
+        except Exception as e:
+            print(f"Error generating final sentiment: {str(e)}")
+            return "Unable to generate final sentiment analysis due to an error."
