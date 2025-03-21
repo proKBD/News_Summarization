@@ -845,21 +845,23 @@ class TextToSpeechConverter:
 
 class ComparativeAnalyzer:
     def __init__(self):
-        # Create a directory to store sentiment history
-        self.history_dir = "sentiment_history"
-        os.makedirs(self.history_dir, exist_ok=True)
+        pass
     
-    def analyze_coverage(self, articles: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def analyze_coverage(self, articles: List[Dict[str, Any]], company_name: str = None) -> Dict[str, Any]:
         """Perform comparative analysis across articles."""
         if not articles:
             return {
                 "topics": [],
                 "sentiment_distribution": {},
-                "sentiment_trend": {},
                 "coverage_differences": ["No articles found for analysis."],
                 "final_sentiment": "No articles found for analysis.",
                 "total_articles": 0
             }
+        
+        # Add company name to each article if provided
+        if company_name:
+            for article in articles:
+                article['company'] = company_name
         
         # Calculate sentiment distribution
         sentiment_dist = self._get_sentiment_distribution(articles)
@@ -873,13 +875,9 @@ class ComparativeAnalyzer:
         # Get final sentiment analysis
         final_sentiment = self._get_final_sentiment(sentiment_dist, articles)
         
-        # Track sentiment trend
-        sentiment_trend = self._track_sentiment_trend(articles)
-        
         return {
             "topics": topics,
             "sentiment_distribution": sentiment_dist,
-            "sentiment_trend": sentiment_trend,
             "coverage_differences": differences,
             "final_sentiment": final_sentiment,
             "total_articles": len(articles)
@@ -1089,141 +1087,3 @@ class ComparativeAnalyzer:
         
         # Return the combined analysis
         return " ".join(summary_parts)
-
-    def _track_sentiment_trend(self, articles: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Track sentiment trends over time."""
-        if not articles:
-            return {"trend": "No data available", "data": {}}
-        
-        try:
-            # Get company name from first article
-            company_name = None
-            for article in articles:
-                if 'company' in article:
-                    company_name = article['company']
-                    break
-            
-            if not company_name:
-                return {"trend": "No company identified", "data": {}}
-            
-            # Create a safe filename
-            filename = re.sub(r'[^\w\s-]', '', company_name).strip().lower()
-            filename = re.sub(r'[-\s]+', '-', filename)
-            history_file = os.path.join(self.history_dir, f"{filename}-sentiment.json")
-            
-            # Get current date
-            current_date = datetime.now().strftime("%Y-%m-%d")
-            
-            # Calculate current sentiment scores
-            positive = 0
-            negative = 0
-            neutral = 0
-            
-            for article in articles:
-                sentiment = article.get('sentiment', 'neutral').lower()
-                if sentiment == 'positive':
-                    positive += 1
-                elif sentiment == 'negative':
-                    negative += 1
-                else:
-                    neutral += 1
-            
-            total = len(articles)
-            if total > 0:
-                positive_pct = (positive / total) * 100
-                negative_pct = (negative / total) * 100
-                neutral_pct = (neutral / total) * 100
-            else:
-                positive_pct = negative_pct = neutral_pct = 0
-            
-            # Current sentiment data
-            current_data = {
-                "date": current_date,
-                "positive": round(positive_pct, 1),
-                "negative": round(negative_pct, 1),
-                "neutral": round(neutral_pct, 1),
-                "article_count": total
-            }
-            
-            # Load existing history or create new
-            history_data = []
-            if os.path.exists(history_file):
-                try:
-                    with open(history_file, 'r') as f:
-                        history_data = json.load(f)
-                except:
-                    history_data = []
-            
-            # Check if we already have data for today
-            updated = False
-            for i, entry in enumerate(history_data):
-                if entry.get('date') == current_date:
-                    history_data[i] = current_data
-                    updated = True
-                    break
-            
-            # Add new entry if not updated
-            if not updated:
-                history_data.append(current_data)
-            
-            # Keep only last 30 days
-            history_data = sorted(history_data, key=lambda x: x.get('date', ''))[-30:]
-            
-            # Save updated history
-            with open(history_file, 'w') as f:
-                json.dump(history_data, f)
-            
-            # Analyze trend
-            trend_description = self._analyze_sentiment_trend(history_data)
-            
-            return {
-                "trend": trend_description,
-                "data": history_data
-            }
-            
-        except Exception as e:
-            print(f"Error tracking sentiment trend: {str(e)}")
-            return {"trend": "Error analyzing trend", "data": {}}
-    
-    def _analyze_sentiment_trend(self, history_data: List[Dict[str, Any]]) -> str:
-        """Analyze sentiment trend from historical data."""
-        if not history_data or len(history_data) < 2:
-            return "Insufficient data for trend analysis"
-        
-        # Sort by date
-        sorted_data = sorted(history_data, key=lambda x: x.get('date', ''))
-        
-        # Get first and last entries
-        first = sorted_data[0]
-        last = sorted_data[-1]
-        
-        # Calculate changes
-        positive_change = last.get('positive', 0) - first.get('positive', 0)
-        negative_change = last.get('negative', 0) - first.get('negative', 0)
-        
-        # Determine trend direction
-        if abs(positive_change) > abs(negative_change):
-            if positive_change > 5:
-                trend = f"Sentiment is improving significantly with a {positive_change:.1f}% increase in positive coverage"
-            elif positive_change > 0:
-                trend = f"Sentiment is slightly improving with a {positive_change:.1f}% increase in positive coverage"
-            elif positive_change < -5:
-                trend = f"Sentiment is declining significantly with a {abs(positive_change):.1f}% decrease in positive coverage"
-            else:
-                trend = f"Sentiment is slightly declining with a {abs(positive_change):.1f}% decrease in positive coverage"
-        else:
-            if negative_change > 5:
-                trend = f"Sentiment is declining significantly with a {negative_change:.1f}% increase in negative coverage"
-            elif negative_change > 0:
-                trend = f"Sentiment is slightly declining with a {negative_change:.1f}% increase in negative coverage"
-            elif negative_change < -5:
-                trend = f"Sentiment is improving significantly with a {abs(negative_change):.1f}% decrease in negative coverage"
-            else:
-                trend = f"Sentiment is slightly improving with a {abs(negative_change):.1f}% decrease in negative coverage"
-        
-        # Add time period
-        days = len(sorted_data)
-        if days > 1:
-            trend += f" over the past {days} days"
-        
-        return trend

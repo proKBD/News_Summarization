@@ -45,10 +45,12 @@ async def analyze_company(request: CompanyRequest):
         analyzed_articles = []
         for article in articles:
             analysis = sentiment_analyzer.analyze_article(article)
+            # Add company name to each article
+            analysis['company'] = request.name
             analyzed_articles.append(analysis)
         
         # Perform comparative analysis
-        comparison = comparative_analyzer.analyze_coverage(analyzed_articles)
+        comparison = comparative_analyzer.analyze_coverage(analyzed_articles, company_name=request.name)
         final_analysis = comparison["final_sentiment"]
         
         # Generate Hindi audio for final analysis

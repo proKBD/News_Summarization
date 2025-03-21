@@ -6,6 +6,7 @@ import pandas as pd
 import json
 from config import API_BASE_URL
 import os
+import plotly.express as px
 
 st.set_page_config(
     page_title="News Summarization App",
@@ -131,7 +132,23 @@ def main():
                                 orient='index',
                                 columns=['Count']
                             )
-                            st.bar_chart(dist_df)
+                            
+                            # Create a custom pie chart with colors
+                            fig = px.pie(
+                                dist_df, 
+                                values='Count',
+                                names=dist_df.index,
+                                color=dist_df.index,
+                                color_discrete_map={
+                                    'positive': 'green',
+                                    'negative': 'red',
+                                    'neutral': 'yellow'
+                                },
+                                title="Basic Sentiment Distribution"
+                            )
+                            # Add percentage labels
+                            fig.update_traces(textposition='inside', textinfo='percent+label')
+                            st.plotly_chart(fig)
                             
                             # Display fine-grained sentiment if available
                             if "fine_grained" in analysis["sentiment_distribution"] and analysis["sentiment_distribution"]["fine_grained"]:
@@ -142,7 +159,26 @@ def main():
                                     orient='index',
                                     columns=['Count']
                                 )
-                                st.bar_chart(fine_df)
+                                
+                                # Create color mapping for fine-grained sentiment
+                                color_map = {}
+                                for category in fine_df.index:
+                                    if 'positive' in category.lower():
+                                        color_map[category] = 'green'
+                                    elif 'negative' in category.lower():
+                                        color_map[category] = 'red'
+                                    else:
+                                        color_map[category] = 'yellow'
+                                
+                                # Create a custom bar chart with colors
+                                fig_fine = px.bar(
+                                    fine_df, 
+                                    x=fine_df.index, 
+                                    y='Count',
+                                    color=fine_df.index,
+                                    color_discrete_map=color_map
+                                )
+                                st.plotly_chart(fig_fine)
                                 
                             # Display sentiment metrics
                             metrics_col1, metrics_col2 = st.columns(2)
@@ -159,7 +195,29 @@ def main():
                                 orient='index',
                                 columns=['Count']
                             )
-                            st.bar_chart(dist_df)
+                            
+                            # Create color mapping
+                            color_map = {}
+                            for category in dist_df.index:
+                                if 'positive' in category.lower():
+                                    color_map[category] = 'green'
+                                elif 'negative' in category.lower():
+                                    color_map[category] = 'red'
+                                else:
+                                    color_map[category] = 'yellow'
+                            
+                            # Create a custom pie chart with colors
+                            fig = px.pie(
+                                dist_df, 
+                                values='Count',
+                                names=dist_df.index,
+                                color=dist_df.index,
+                                color_discrete_map=color_map,
+                                title="Sentiment Distribution"
+                            )
+                            # Add percentage labels
+                            fig.update_traces(textposition='inside', textinfo='percent+label')
+                            st.plotly_chart(fig)
                     
                     # Source Distribution
                     if "source_distribution" in analysis:
@@ -181,30 +239,6 @@ def main():
                         st.subheader("Coverage Analysis")
                         for diff in analysis["coverage_differences"]:
                             st.write("- " + diff)
-                            
-                    # Display sentiment trend if available
-                    if "sentiment_trend" in analysis and analysis["sentiment_trend"]:
-                        st.subheader("📈 Sentiment Trend")
-                        trend_data = analysis["sentiment_trend"]
-                        
-                        # Display trend description
-                        if "trend" in trend_data:
-                            st.write(trend_data["trend"])
-                        
-                        # Display trend chart if data is available
-                        if "data" in trend_data and trend_data["data"]:
-                            try:
-                                # Convert to DataFrame for plotting
-                                trend_df = pd.DataFrame(trend_data["data"])
-                                
-                                # Set date as index
-                                if "date" in trend_df.columns:
-                                    trend_df = trend_df.set_index("date")
-                                
-                                # Plot sentiment trends
-                                st.line_chart(trend_df[["positive", "negative", "neutral"]])
-                            except Exception as e:
-                                st.error(f"Error displaying trend chart: {str(e)}")
                     
                     # Display Final Sentiment and Audio
                     st.header("🎯 Final Analysis")
