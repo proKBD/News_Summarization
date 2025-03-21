@@ -17,7 +17,8 @@ RSS_FEEDS = {
 }
 
 # Model Settings
-SENTIMENT_MODEL = "ProsusAI/finbert"  # Financial sentiment analysis model
+SENTIMENT_MODEL = "yiyanghkust/finbert-tone"  # More advanced financial sentiment model
+SENTIMENT_FINE_GRAINED_MODEL = "mrm8488/distilroberta-finetuned-financial-news-sentiment-analysis"
 SUMMARIZATION_MODEL = "t5-base"
 
 # Cache Settings
