@@ -7,6 +7,7 @@ import json
 from config import API_BASE_URL
 import os
 import plotly.express as px
+import altair as alt
 
 st.set_page_config(
     page_title="News Summarization App",
@@ -23,6 +24,10 @@ def analyze_company(company_name):
         )
         if response.status_code == 200:
             data = response.json()
+            # Print the response data for debugging
+            print("API Response Data:")
+            print(json.dumps(data, indent=2))
+            
             # Download audio file if available
             if 'audio_url' in data:
                 audio_response = requests.get(f"{API_BASE_URL}{data['audio_url']}")
@@ -152,178 +157,199 @@ def main():
                     if "sentiment_distribution" in analysis:
                         st.subheader("Sentiment Distribution")
                         
-                        # Check if sentiment_distribution is a dictionary with a 'basic' key (new format)
-                        if isinstance(analysis["sentiment_distribution"], dict) and "basic" in analysis["sentiment_distribution"]:
-                            # New format with basic and fine-grained sentiment
-                            basic_dist = analysis["sentiment_distribution"]["basic"]
-                            dist_df = pd.DataFrame.from_dict(
-                                basic_dist, 
-                                orient='index',
-                                columns=['Count']
+                        # Debug: Print sentiment distribution data
+                        print("Sentiment Distribution Data:")
+                        print(json.dumps(analysis["sentiment_distribution"], indent=2))
+                        
+                        sentiment_dist = analysis["sentiment_distribution"]
+                        
+                        # Create a very simple visualization that will definitely work
+                        try:
+                            # Extract basic sentiment data
+                            if isinstance(sentiment_dist, dict):
+                                if "basic" in sentiment_dist and isinstance(sentiment_dist["basic"], dict):
+                                    basic_dist = sentiment_dist["basic"]
+                                elif any(k in sentiment_dist for k in ['positive', 'negative', 'neutral']):
+                                    basic_dist = {k: v for k, v in sentiment_dist.items() 
+                                                if k in ['positive', 'negative', 'neutral']}
+                                else:
+                                    basic_dist = {'positive': 0, 'negative': 0, 'neutral': 1}
+                            else:
+                                basic_dist = {'positive': 0, 'negative': 0, 'neutral': 1}
+                            
+                            # Calculate percentages
+                            total_articles = sum(basic_dist.values())
+                            if total_articles > 0:
+                                percentages = {
+                                    k: (v / total_articles) * 100 
+                                    for k, v in basic_dist.items()
+                                }
+                            else:
+                                percentages = {k: 0 for k in basic_dist}
+                            
+                            # Display as simple text and metrics
+                            st.write("**Sentiment Distribution:**")
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric(
+                                    "Positive", 
+                                    basic_dist.get('positive', 0),
+                                    f"{percentages.get('positive', 0):.1f}%"
+                                )
+                            with col2:
+                                st.metric(
+                                    "Negative", 
+                                    basic_dist.get('negative', 0),
+                                    f"{percentages.get('negative', 0):.1f}%"
+                                )
+                            with col3:
+                                st.metric(
+                                    "Neutral", 
+                                    basic_dist.get('neutral', 0),
+                                    f"{percentages.get('neutral', 0):.1f}%"
+                                )
+                            
+                            # Create a simple bar chart using Altair
+                            
+                            # Create a simple DataFrame with consistent capitalization and percentages
+                            chart_data = pd.DataFrame({
+                                'Sentiment': ['Positive', 'Negative', 'Neutral'],
+                                'Count': [
+                                    basic_dist.get('positive', 0),  # Map lowercase keys to capitalized display
+                                    basic_dist.get('negative', 0),
+                                    basic_dist.get('neutral', 0)
+                                ],
+                                'Percentage': [
+                                    f"{percentages.get('positive', 0):.1f}%",
+                                    f"{percentages.get('negative', 0):.1f}%",
+                                    f"{percentages.get('neutral', 0):.1f}%"
+                                ]
+                            })
+                            
+                            # Add debug output to see what's in the data
+                            print("Chart Data for Sentiment Distribution:")
+                            print(chart_data)
+                            
+                            # Create a simple bar chart with percentages
+                            chart = alt.Chart(chart_data).mark_bar().encode(
+                                y='Sentiment',  # Changed from x to y for horizontal bars
+                                x='Count',      # Changed from y to x for horizontal bars
+                                color=alt.Color('Sentiment', scale=alt.Scale(
+                                    domain=['Positive', 'Negative', 'Neutral'],
+                                    range=['green', 'red', 'gray']
+                                )),
+                                tooltip=['Sentiment', 'Count', 'Percentage']  # Add tooltip with percentage
+                            ).properties(
+                                width=600,
+                                height=300
                             )
                             
-                            # Create a custom pie chart with colors
-                            fig = px.pie(
-                                dist_df, 
-                                values='Count',
-                                names=dist_df.index,
-                                color=dist_df.index,
-                                color_discrete_map={
-                                    'positive': 'green',
-                                    'negative': 'red',
-                                    'neutral': 'yellow'
-                                },
-                                title="Basic Sentiment Distribution"
+                            # Add text labels with percentages
+                            text = chart.mark_text(
+                                align='left',
+                                baseline='middle',
+                                dx=3  # Nudge text to the right so it doesn't overlap with the bar
+                            ).encode(
+                                text='Percentage'
                             )
-                            # Add percentage labels
-                            fig.update_traces(textposition='inside', textinfo='percent+label')
-                            st.plotly_chart(fig)
                             
-                            # Display fine-grained sentiment if available
-                            if "fine_grained" in analysis["sentiment_distribution"] and analysis["sentiment_distribution"]["fine_grained"]:
-                                st.subheader("Fine-Grained Sentiment")
-                                fine_grained = analysis["sentiment_distribution"]["fine_grained"]
-                                fine_df = pd.DataFrame.from_dict(
-                                    fine_grained,
-                                    orient='index',
-                                    columns=['Count']
-                                )
-                                
-                                # Create color mapping for fine-grained sentiment
-                                color_map = {}
-                                for category in fine_df.index:
-                                    if 'positive' in category.lower():
-                                        color_map[category] = 'green'
-                                    elif 'negative' in category.lower():
-                                        color_map[category] = 'red'
-                                    else:
-                                        color_map[category] = 'yellow'
-                                
-                                # Create a custom bar chart with colors
-                                fig_fine = px.bar(
-                                    fine_df, 
-                                    x=fine_df.index, 
-                                    y='Count',
-                                    color=fine_df.index,
-                                    color_discrete_map=color_map
-                                )
-                                st.plotly_chart(fig_fine)
-                                
-                            # Display sentiment metrics
-                            metrics_col1, metrics_col2 = st.columns(2)
-                            with metrics_col1:
-                                if "avg_score" in analysis["sentiment_distribution"]:
-                                    st.metric("Average Sentiment Score", f"{analysis['sentiment_distribution']['avg_score']:.2f}")
-                            with metrics_col2:
-                                if "volatility" in analysis["sentiment_distribution"]:
-                                    st.metric("Sentiment Volatility", f"{analysis['sentiment_distribution']['volatility']:.2f}")
+                            # Combine the chart and text
+                            chart_with_text = (chart + text)
                             
-                            # Display sentiment indices if available
-                            if "sentiment_indices" in analysis and analysis["sentiment_indices"]:
-                                st.subheader("Sentiment Indices")
-                                indices = analysis["sentiment_indices"]
+                            st.altair_chart(chart_with_text, use_container_width=True)
+                        
+                        except Exception as e:
+                            st.error(f"Error creating visualization: {str(e)}")
+                            st.write("Fallback to simple text display:")
+                            if isinstance(sentiment_dist, dict):
+                                if "basic" in sentiment_dist:
+                                    st.write(f"Positive: {sentiment_dist['basic'].get('positive', 0)}")
+                                    st.write(f"Negative: {sentiment_dist['basic'].get('negative', 0)}")
+                                    st.write(f"Neutral: {sentiment_dist['basic'].get('neutral', 0)}")
+                                else:
+                                    st.write(f"Positive: {sentiment_dist.get('positive', 0)}")
+                                    st.write(f"Negative: {sentiment_dist.get('negative', 0)}")
+                                    st.write(f"Neutral: {sentiment_dist.get('neutral', 0)}")
+                            else:
+                                st.write("No valid sentiment data available")
+                    
+                    # Display sentiment indices if available
+                    if "sentiment_indices" in analysis and analysis["sentiment_indices"]:
+                        st.subheader("Sentiment Indices")
+                        
+                        # Debug: Print sentiment indices
+                        print("Sentiment Indices:")
+                        print(json.dumps(analysis["sentiment_indices"], indent=2))
+                        
+                        # Get the indices data
+                        indices = analysis["sentiment_indices"]
+                        
+                        # Create a very simple visualization that will definitely work
+                        try:
+                            if isinstance(indices, dict):
+                                # Display as simple metrics in columns
+                                cols = st.columns(3)
                                 
-                                # Create a DataFrame for the indices
-                                indices_data = {
-                                    "Index": [],
-                                    "Value": [],
-                                    "Description": []
+                                # Define display names and descriptions
+                                display_names = {
+                                    "positivity_index": "Positivity",
+                                    "negativity_index": "Negativity",
+                                    "emotional_intensity": "Emotional Intensity",
+                                    "controversy_score": "Controversy",
+                                    "confidence_score": "Confidence",
+                                    "esg_relevance": "ESG Relevance"
                                 }
                                 
-                                # Add indices with descriptions
-                                if "positivity_index" in indices:
-                                    indices_data["Index"].append("Positivity Index")
-                                    indices_data["Value"].append(indices["positivity_index"])
-                                    indices_data["Description"].append("Measures the degree of positive sentiment (0-1)")
+                                # Display each index as a metric
+                                for i, (key, value) in enumerate(indices.items()):
+                                    if isinstance(value, (int, float)):
+                                        with cols[i % 3]:
+                                            display_name = display_names.get(key, key.replace("_", " ").title())
+                                            st.metric(display_name, f"{value:.2f}")
                                 
-                                if "negativity_index" in indices:
-                                    indices_data["Index"].append("Negativity Index")
-                                    indices_data["Value"].append(indices["negativity_index"])
-                                    indices_data["Description"].append("Measures the degree of negative sentiment (0-1)")
+                                # Create a simple bar chart using Altair
                                 
-                                if "emotional_intensity" in indices:
-                                    indices_data["Index"].append("Emotional Intensity")
-                                    indices_data["Value"].append(indices["emotional_intensity"])
-                                    indices_data["Description"].append("Measures the strength of emotional content (0-1)")
+                                # Create a simple DataFrame
+                                chart_data = pd.DataFrame({
+                                    'Index': [display_names.get(k, k.replace("_", " ").title()) for k in indices.keys()],
+                                    'Value': [v if isinstance(v, (int, float)) else 0 for v in indices.values()]
+                                })
                                 
-                                if "controversy_score" in indices:
-                                    indices_data["Index"].append("Controversy Score")
-                                    indices_data["Value"].append(indices["controversy_score"])
-                                    indices_data["Description"].append("Indicates conflicting sentiments (0-1)")
+                                # Create a simple bar chart
+                                chart = alt.Chart(chart_data).mark_bar().encode(
+                                    x='Value',
+                                    y='Index',
+                                    color=alt.Color('Index')
+                                ).properties(
+                                    width=600,
+                                    height=300
+                                )
                                 
-                                if "confidence_score" in indices:
-                                    indices_data["Index"].append("Confidence Score")
-                                    indices_data["Value"].append(indices["confidence_score"])
-                                    indices_data["Description"].append("Model confidence in sentiment analysis (0-1)")
+                                st.altair_chart(chart, use_container_width=True)
                                 
-                                if "esg_relevance" in indices:
-                                    indices_data["Index"].append("ESG Relevance")
-                                    indices_data["Value"].append(indices["esg_relevance"])
-                                    indices_data["Description"].append("Relevance to Environmental, Social, Governance topics (0-1)")
-                                
-                                # Create DataFrame and display
-                                indices_df = pd.DataFrame(indices_data)
-                                
-                                # Create a bar chart for the indices
-                                if not indices_df.empty:
-                                    # Create color mapping for indices
-                                    colors = []
-                                    for idx in indices_df["Index"]:
-                                        if "Positivity" in idx:
-                                            colors.append("green")
-                                        elif "Negativity" in idx or "Controversy" in idx:
-                                            colors.append("red")
-                                        elif "ESG" in idx:
-                                            colors.append("blue")
-                                        elif "Emotional" in idx:
-                                            colors.append("purple")
-                                        else:
-                                            colors.append("gray")
-                                    
-                                    # Create a bar chart
-                                    fig = px.bar(
-                                        indices_df,
-                                        x="Index",
-                                        y="Value",
-                                        color="Index",
-                                        color_discrete_sequence=colors,
-                                        title="Sentiment Indices"
-                                    )
-                                    fig.update_layout(xaxis_title="", yaxis_title="Score (0-1)")
-                                    st.plotly_chart(fig)
-                                    
-                                    # Display the table with descriptions
-                                    st.table(indices_df[["Index", "Value", "Description"]])
-                        else:
-                            # Old format (simple dictionary)
-                            dist_df = pd.DataFrame.from_dict(
-                                analysis["sentiment_distribution"], 
-                                orient='index',
-                                columns=['Count']
-                            )
-                            
-                            # Create color mapping
-                            color_map = {}
-                            for category in dist_df.index:
-                                if 'positive' in category.lower():
-                                    color_map[category] = 'green'
-                                elif 'negative' in category.lower():
-                                    color_map[category] = 'red'
-                                else:
-                                    color_map[category] = 'yellow'
-                            
-                            # Create a custom pie chart with colors
-                            fig = px.pie(
-                                dist_df, 
-                                values='Count',
-                                names=dist_df.index,
-                                color=dist_df.index,
-                                color_discrete_map=color_map,
-                                title="Sentiment Distribution"
-                            )
-                            # Add percentage labels
-                            fig.update_traces(textposition='inside', textinfo='percent+label')
-                            st.plotly_chart(fig)
+                                # Add descriptions
+                                with st.expander("Sentiment Indices Explained"):
+                                    st.markdown("""
+                                    - **Positivity**: Measures the positive sentiment in the articles (0-1)
+                                    - **Negativity**: Measures the negative sentiment in the articles (0-1)
+                                    - **Emotional Intensity**: Measures the overall emotional content (0-1)
+                                    - **Controversy**: High when both positive and negative sentiments are strong (0-1)
+                                    - **Confidence**: Confidence in the sentiment analysis (0-1)
+                                    - **ESG Relevance**: Relevance to Environmental, Social, and Governance topics (0-1)
+                                    """)
+                            else:
+                                st.warning("Sentiment indices data is not in the expected format.")
+                                st.write("No valid sentiment indices available")
+                        except Exception as e:
+                            st.error(f"Error creating indices visualization: {str(e)}")
+                            st.write("Fallback to simple text display:")
+                            if isinstance(indices, dict):
+                                for key, value in indices.items():
+                                    if isinstance(value, (int, float)):
+                                        st.write(f"{key.replace('_', ' ').title()}: {value:.2f}")
+                            else:
+                                st.write("No valid sentiment indices data available")
                     
                     # Source Distribution
                     if "source_distribution" in analysis:
@@ -353,11 +379,14 @@ def main():
                         
                         # Display sentiment indices in the sidebar if available
                         if "sentiment_indices" in analysis and analysis["sentiment_indices"]:
-                            st.sidebar.markdown("### Sentiment Indices")
                             indices = analysis["sentiment_indices"]
-                            for idx_name, idx_value in indices.items():
-                                formatted_name = " ".join(word.capitalize() for word in idx_name.replace("_", " ").split())
-                                st.sidebar.metric(formatted_name, f"{idx_value:.2f}")
+                            # Verify we have valid data
+                            if indices and any(isinstance(v, (int, float)) for v in indices.values()):
+                                st.sidebar.markdown("### Sentiment Indices")
+                                for idx_name, idx_value in indices.items():
+                                    if isinstance(idx_value, (int, float)):
+                                        formatted_name = " ".join(word.capitalize() for word in idx_name.replace("_", " ").split())
+                                        st.sidebar.metric(formatted_name, f"{idx_value:.2f}")
                         
                         # Display ensemble model information if available
                         if "ensemble_info" in result:

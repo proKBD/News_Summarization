@@ -1021,13 +1021,19 @@ class ComparativeAnalyzer:
                 "sentiment_indices": {}
             }
         
+        # Debug: Print articles for analysis
+        print(f"Analyzing {len(articles)} articles for company: {company_name}")
+        
         # Add company name to each article if provided
         if company_name:
             for article in articles:
                 article['company'] = company_name
         
         # Calculate sentiment distribution
+        print("Calculating sentiment distribution...")
         sentiment_dist = self._get_sentiment_distribution(articles)
+        print("Sentiment distribution result:")
+        print(sentiment_dist)
         
         # Analyze common topics
         topics = self._analyze_topics(articles)
@@ -1038,7 +1044,7 @@ class ComparativeAnalyzer:
         # Get final sentiment analysis
         final_sentiment = self._get_final_sentiment(sentiment_dist, articles)
         
-        return {
+        result = {
             "topics": topics,
             "sentiment_distribution": sentiment_dist,
             "coverage_differences": differences,
@@ -1046,6 +1052,12 @@ class ComparativeAnalyzer:
             "total_articles": len(articles),
             "sentiment_indices": sentiment_dist.get("sentiment_indices", {})
         }
+        
+        # Debug: Print final result
+        print("Final comparative analysis result:")
+        print(result)
+        
+        return result
 
     def _get_sentiment_distribution(self, articles: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate distribution of sentiments across articles."""
@@ -1068,53 +1080,114 @@ class ComparativeAnalyzer:
             "esg_relevance": []
         }
         
+        # Debug: Print articles for sentiment distribution
+        print(f"Processing {len(articles)} articles for sentiment distribution")
+        
         # Process each article
-        for article in articles:
-            # Basic sentiment
-            sentiment = article.get('sentiment', 'neutral').lower()
-            if isinstance(sentiment, str):
-                basic_distribution[sentiment] = basic_distribution.get(sentiment, 0) + 1
-            
-            # Sentiment score
-            score = article.get('sentiment_score', 0.0)
-            sentiment_scores.append(score)
-            
-            # Fine-grained sentiment
-            fine_grained = article.get('fine_grained_sentiment', {})
-            if fine_grained and 'category' in fine_grained:
-                category = fine_grained['category'].lower() if isinstance(fine_grained['category'], str) else "unknown"
-                fine_grained_distribution[category] = fine_grained_distribution.get(category, 0) + 1
-            
-            # Collect sentiment indices
-            indices = article.get('sentiment_indices', {})
-            for index_name, index_values in sentiment_indices.items():
-                if index_name in indices:
-                    index_values.append(indices[index_name])
+        for i, article in enumerate(articles):
+            try:
+                # Debug: Print article sentiment data
+                print(f"Article {i+1} sentiment data:")
+                print(f"  Basic sentiment: {article.get('sentiment', 'N/A')}")
+                print(f"  Fine-grained: {article.get('fine_grained_sentiment', {})}")
+                print(f"  Sentiment indices: {article.get('sentiment_indices', {})}")
+                
+                # Basic sentiment
+                sentiment = article.get('sentiment', 'neutral')
+                if isinstance(sentiment, str):
+                    sentiment = sentiment.lower()
+                    # Ensure we have a valid sentiment category
+                    if sentiment not in basic_distribution:
+                        sentiment = 'neutral'
+                    basic_distribution[sentiment] = basic_distribution.get(sentiment, 0) + 1
+                else:
+                    # Handle non-string sentiment values
+                    basic_distribution['neutral'] = basic_distribution.get('neutral', 0) + 1
+                
+                # Sentiment score
+                score = article.get('sentiment_score', 0.0)
+                if isinstance(score, (int, float)):
+                    sentiment_scores.append(score)
+                
+                # Fine-grained sentiment
+                fine_grained = article.get('fine_grained_sentiment', {})
+                if isinstance(fine_grained, dict) and 'category' in fine_grained:
+                    category = fine_grained['category']
+                    if isinstance(category, str):
+                        category = category.lower()
+                        fine_grained_distribution[category] = fine_grained_distribution.get(category, 0) + 1
+                
+                # Collect sentiment indices
+                indices = article.get('sentiment_indices', {})
+                if isinstance(indices, dict):
+                    for index_name, index_values in sentiment_indices.items():
+                        if index_name in indices and isinstance(indices[index_name], (int, float)):
+                            index_values.append(indices[index_name])
+            except Exception as e:
+                print(f"Error processing article {i+1} for sentiment distribution: {str(e)}")
+                # Continue with next article
+                continue
         
-        # Calculate average sentiment score
-        avg_sentiment_score = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0
+        # Debug: Print collected data
+        print("Collected sentiment data:")
+        print(f"  Basic distribution: {basic_distribution}")
+        print(f"  Fine-grained distribution: {fine_grained_distribution}")
+        print(f"  Sentiment scores: {sentiment_scores}")
+        print(f"  Sentiment indices collected: {sentiment_indices}")
         
-        # Calculate sentiment volatility (standard deviation)
+        # Calculate average sentiment score with fallback
+        avg_sentiment_score = 0.5  # Default neutral value
+        if sentiment_scores:
+            avg_sentiment_score = sum(sentiment_scores) / len(sentiment_scores)
+        
+        # Calculate sentiment volatility (standard deviation) with fallback
         sentiment_volatility = 0
         if len(sentiment_scores) > 1:
-            sentiment_volatility = statistics.stdev(sentiment_scores)
+            try:
+                sentiment_volatility = statistics.stdev(sentiment_scores)
+            except Exception as e:
+                print(f"Error calculating sentiment volatility: {str(e)}")
         
-        # Calculate average sentiment indices
+        # Calculate average sentiment indices with fallbacks
         avg_indices = {}
         for index_name, values in sentiment_indices.items():
             if values:
                 avg_indices[index_name] = round(sum(values) / len(values), 3)
             else:
-                avg_indices[index_name] = 0.0
+                # Provide default values for empty indices
+                if index_name in ["positivity_index", "confidence_score"]:
+                    avg_indices[index_name] = 0.5  # Neutral default
+                else:
+                    avg_indices[index_name] = 0.0  # Zero default for other indices
         
-        return {
+        # Ensure all expected indices exist
+        for index_name in ["positivity_index", "negativity_index", "emotional_intensity", 
+                          "controversy_score", "confidence_score", "esg_relevance"]:
+            if index_name not in avg_indices:
+                avg_indices[index_name] = 0.5 if index_name in ["positivity_index", "confidence_score"] else 0.0
+        
+        # Ensure we have at least one item in each distribution
+        if not any(basic_distribution.values()):
+            basic_distribution['neutral'] = 1
+        
+        # Ensure fine_grained_distribution has at least one entry if empty
+        if not fine_grained_distribution:
+            fine_grained_distribution['neutral'] = 1
+        
+        result = {
             "basic": basic_distribution,
             "fine_grained": fine_grained_distribution,
             "avg_score": round(avg_sentiment_score, 3),
             "volatility": round(sentiment_volatility, 3),
             "sentiment_indices": avg_indices
         }
-    
+        
+        # Debug: Print final sentiment distribution result
+        print("Final sentiment distribution result:")
+        print(result)
+        
+        return result
+
     def _analyze_topics(self, articles: List[Dict[str, Any]]) -> List[str]:
         """Analyze common topics across articles using TF-IDF."""
         try:
