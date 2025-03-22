@@ -1,3 +1,4 @@
+
 # Ignore virtual environment
 venv/
 .env
@@ -8,7 +9,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
+sentiment_history/
 # Ignore macOS system files
 .DS_Store
 
