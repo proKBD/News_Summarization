@@ -291,3 +291,43 @@ print(result)
 4. Implement user authentication for API access
 5. Add more fine-grained sentiment analysis categories
 6. Improve error handling for unreliable news sources
+
+## Deployment to Hugging Face Spaces
+
+This application can be deployed to Hugging Face Spaces. Here's how to do it:
+
+1. Create a new Space on Hugging Face:
+   - Go to https://huggingface.co/spaces
+   - Click "New Space"
+   - Choose "Streamlit" as the SDK
+   - Name your space (e.g., "proKBD/news-summarization")
+   - Choose "Public" or "Private" visibility
+
+2. Connect your GitHub repository:
+   - Push your code to GitHub if you haven't already
+   - In the Space settings, connect your GitHub repository
+   - Select the branch you want to deploy (usually "main" or "master")
+
+3. Configure Environment Variables:
+   - Go to your Space's settings
+   - Navigate to the "Repository Secrets" section
+   - Add the following secrets from `.env.example`:
+     - API_HOST
+     - API_PORT
+     - API_BASE_URL
+     - ARTICLES_PER_SOURCE
+     - USER_AGENT
+     - CACHE_DIR
+     - CACHE_EXPIRY
+     - CACHE_DURATION
+     - AUDIO_OUTPUT_DIR
+     - DEFAULT_LANG
+
+4. The Space will automatically build and deploy your application using the provided Dockerfile.
+
+### Important Notes:
+- The application requires Python 3.9 or higher
+- Make sure all dependencies are listed in `requirements.txt`
+- The application uses port 8501 for Streamlit
+- Audio files are stored in the `audio_output` directory
+- Sentiment analysis history is stored in the `sentiment_history` directory

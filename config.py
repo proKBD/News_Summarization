@@ -1,13 +1,19 @@
 """Configuration settings for the News Summarization application."""
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 # API Settings
-API_HOST = "localhost"
-API_PORT = 8005  # Changed from 8001 to 8005
-API_BASE_URL = f"http://{API_HOST}:{API_PORT}"
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("API_PORT", "8005"))
+API_BASE_URL = os.getenv("API_BASE_URL", f"http://{API_HOST}:{API_PORT}")
 
 # News Scraping Settings
-ARTICLES_PER_SOURCE = 10  # New setting for per-source limit
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+ARTICLES_PER_SOURCE = int(os.getenv("ARTICLES_PER_SOURCE", "10"))
+USER_AGENT = os.getenv("USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 
 # RSS Feed Settings
 RSS_FEEDS = {
@@ -40,13 +46,13 @@ SENTIMENT_CATEGORIES = {
 }
 
 # Cache Settings
-CACHE_DIR = ".cache"
-CACHE_EXPIRY = 3600  # 1 hour
-CACHE_DURATION = 300  # 5 minutes in seconds
+CACHE_DIR = os.getenv("CACHE_DIR", ".cache")
+CACHE_EXPIRY = int(os.getenv("CACHE_EXPIRY", "3600"))  # 1 hour
+CACHE_DURATION = int(os.getenv("CACHE_DURATION", "300"))  # 5 minutes in seconds
 
 # Audio Settings
-AUDIO_OUTPUT_DIR = "audio_output"
-DEFAULT_LANG = "hi"  # Hindi
+AUDIO_OUTPUT_DIR = os.getenv("AUDIO_OUTPUT_DIR", "audio_output")
+DEFAULT_LANG = os.getenv("DEFAULT_LANG", "hi")  # Hindi
 
 # News Sources
 NEWS_SOURCES = {
