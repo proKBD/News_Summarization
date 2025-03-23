@@ -1,45 +1,80 @@
 """Streamlit frontend for the News Summarization application."""
 
 import streamlit as st
-import requests
 import pandas as pd
 import json
-from config import API_BASE_URL
 import os
 import plotly.express as px
 import altair as alt
+from utils import (
+    analyze_company_data,
+    TextToSpeechConverter,
+    get_translator,
+    NewsExtractor,
+    SentimentAnalyzer,
+    TextSummarizer
+)
 
+# Set page config
 st.set_page_config(
     page_title="News Summarization App",
     page_icon="📰",
     layout="wide"
 )
 
-def analyze_company(company_name):
-    """Send analysis request to API."""
+# Show loading message
+with st.spinner("Initializing the application... Please wait while we load the models."):
+    # Initialize components
     try:
-        response = requests.post(
-            f"{API_BASE_URL}/api/analyze",
-            json={"name": company_name}
-        )
-        if response.status_code == 200:
-            data = response.json()
-            # Print the response data for debugging
-            print("API Response Data:")
-            print(json.dumps(data, indent=2))
-            
-            # Download audio file if available
-            if 'audio_url' in data:
-                audio_response = requests.get(f"{API_BASE_URL}{data['audio_url']}")
-                if audio_response.status_code == 200:
-                    data['audio_content'] = audio_response.content
-            return data
-        else:
-            st.error(f"Error from API: {response.text}")
-            return {"articles": [], "comparative_sentiment_score": {}, "final_sentiment_analysis": "", "audio_url": None}
+        st.success("Application initialized successfully!")
     except Exception as e:
-        st.error(f"Error analyzing company: {str(e)}")
-        return {"articles": [], "comparative_sentiment_score": {}, "final_sentiment_analysis": "", "audio_url": None}
+        st.error(f"Error initializing application: {str(e)}")
+        st.info("Please try refreshing the page.")
+
+def process_company(company_name):
+    """Process company data directly."""
+    try:
+        # Call the analysis function directly from utils
+        data = analyze_company_data(company_name)
+        
+        # Generate Hindi audio from final analysis
+        if data.get("final_sentiment_analysis"):
+            # Get the translator
+            translator = get_translator()
+            if translator:
+                try:
+                    # Create a more detailed Hindi explanation
+                    sentiment_explanation = f"""
+                    {company_name} के समाचारों का विश्लेषण:
+                    
+                    समग्र भावना: {data['final_sentiment_analysis']}
+                    
+                    भावनात्मक विश्लेषण:
+                    - सकारात्मक भावना: {data.get('comparative_sentiment_score', {}).get('sentiment_indices', {}).get('positivity_index', 0):.2f}
+                    - नकारात्मक भावना: {data.get('comparative_sentiment_score', {}).get('sentiment_indices', {}).get('negativity_index', 0):.2f}
+                    - भावनात्मक तीव्रता: {data.get('comparative_sentiment_score', {}).get('sentiment_indices', {}).get('emotional_intensity', 0):.2f}
+                    
+                    विश्वसनीयता स्कोर: {data.get('comparative_sentiment_score', {}).get('sentiment_indices', {}).get('confidence_score', 0):.2f}
+                    """
+                    
+                    # Generate Hindi audio
+                    tts_converter = TextToSpeechConverter()
+                    audio_path = tts_converter.generate_audio(
+                        sentiment_explanation,
+                        f'{company_name}_summary'
+                    )
+                    data['audio_path'] = audio_path
+                except Exception as e:
+                    print(f"Error generating Hindi audio: {str(e)}")
+                    data['audio_path'] = None
+            else:
+                print("Translator not available")
+                data['audio_path'] = None
+            
+        return data
+    except Exception as e:
+        st.error(f"Error processing company: {str(e)}")
+        return {"articles": [], "comparative_sentiment_score": {}, "final_sentiment_analysis": "", "audio_path": None}
 
 def main():
     st.title("📰 News Summarization and Analysis")
@@ -59,33 +94,53 @@ def main():
             st.sidebar.error("Please enter a valid company name (at least 2 characters)")
         else:
             with st.spinner("Analyzing news articles..."):
-                result = analyze_company(company)
-                
-                if result and result.get("articles"):
+                try:
+                    # Process company data
+                    data = process_company(company)
+                    
+                    if not data["articles"]:
+                        st.error("No articles found for analysis.")
+                        return
+                    
                     # Display Articles
                     st.header("📑 News Articles")
-                    for idx, article in enumerate(result["articles"], 1):
+                    for idx, article in enumerate(data["articles"], 1):
                         with st.expander(f"Article {idx}: {article['title']}"):
-                            st.write("**Content:**", article.get("content", "No content available"))
-                            if "summary" in article:
-                                st.write("**Summary:**", article["summary"])
-                            st.write("**Source:**", article.get("source", "Unknown"))
+                            # Display content with proper formatting
+                            if article.get("content"):
+                                st.markdown("**Content:**")
+                                st.write(article["content"])
+                            else:
+                                st.warning("No content available for this article")
+                            
+                            # Display summary if available
+                            if article.get("summary"):
+                                st.markdown("**Summary:**")
+                                st.write(article["summary"])
+                            
+                            # Display source
+                            if article.get("source"):
+                                st.markdown("**Source:**")
+                                st.write(article["source"])
                             
                             # Enhanced sentiment display
                             if "sentiment" in article:
                                 sentiment_col1, sentiment_col2 = st.columns(2)
                                 with sentiment_col1:
-                                    st.write("**Sentiment:**", article["sentiment"])
-                                    st.write("**Confidence Score:**", f"{article.get('sentiment_score', 0)*100:.1f}%")
+                                    st.markdown("**Basic Sentiment:**")
+                                    st.write(article["sentiment"])
+                                    if "sentiment_score" in article:
+                                        st.write(f"**Confidence Score:** {article['sentiment_score']*100:.1f}%")
                                 
                                 with sentiment_col2:
                                     # Display fine-grained sentiment if available
                                     if "fine_grained_sentiment" in article and article["fine_grained_sentiment"]:
+                                        st.markdown("**Detailed Sentiment:**")
                                         fine_grained = article["fine_grained_sentiment"]
                                         if "category" in fine_grained:
-                                            st.write("**Detailed Sentiment:**", fine_grained["category"])
+                                            st.write(f"Category: {fine_grained['category']}")
                                         if "confidence" in fine_grained:
-                                            st.write("**Confidence:**", f"{fine_grained['confidence']*100:.1f}%")
+                                            st.write(f"Confidence: {fine_grained['confidence']*100:.1f}%")
                             
                             # Display sentiment indices if available
                             if "sentiment_indices" in article and article["sentiment_indices"]:
@@ -146,24 +201,20 @@ def main():
                                     st.markdown(f"> {target['context']}")
                                     st.markdown("---")
                             
+                            # Display URL if available
                             if "url" in article:
-                                st.write("**[Read More](%s)**" % article["url"])
+                                st.markdown(f"**[Read More]({article['url']})**")
                     
                     # Display Comparative Analysis
                     st.header("📊 Comparative Analysis")
-                    analysis = result.get("comparative_sentiment_score", {})
+                    analysis = data.get("comparative_sentiment_score", {})
                     
                     # Sentiment Distribution
                     if "sentiment_distribution" in analysis:
                         st.subheader("Sentiment Distribution")
                         
-                        # Debug: Print sentiment distribution data
-                        print("Sentiment Distribution Data:")
-                        print(json.dumps(analysis["sentiment_distribution"], indent=2))
-                        
                         sentiment_dist = analysis["sentiment_distribution"]
                         
-                        # Create a very simple visualization that will definitely work
                         try:
                             # Extract basic sentiment data
                             if isinstance(sentiment_dist, dict):
@@ -187,7 +238,7 @@ def main():
                             else:
                                 percentages = {k: 0 for k in basic_dist}
                             
-                            # Display as simple text and metrics
+                            # Display as metrics
                             st.write("**Sentiment Distribution:**")
                             
                             col1, col2, col3 = st.columns(3)
@@ -210,13 +261,11 @@ def main():
                                     f"{percentages.get('neutral', 0):.1f}%"
                                 )
                             
-                            # Create a simple bar chart using Altair
-                            
-                            # Create a simple DataFrame with consistent capitalization and percentages
+                            # Create visualization
                             chart_data = pd.DataFrame({
                                 'Sentiment': ['Positive', 'Negative', 'Neutral'],
                                 'Count': [
-                                    basic_dist.get('positive', 0),  # Map lowercase keys to capitalized display
+                                    basic_dist.get('positive', 0),
                                     basic_dist.get('negative', 0),
                                     basic_dist.get('neutral', 0)
                                 ],
@@ -227,71 +276,44 @@ def main():
                                 ]
                             })
                             
-                            # Add debug output to see what's in the data
-                            print("Chart Data for Sentiment Distribution:")
-                            print(chart_data)
-                            
-                            # Create a simple bar chart with percentages
                             chart = alt.Chart(chart_data).mark_bar().encode(
-                                y='Sentiment',  # Changed from x to y for horizontal bars
-                                x='Count',      # Changed from y to x for horizontal bars
+                                y='Sentiment',
+                                x='Count',
                                 color=alt.Color('Sentiment', scale=alt.Scale(
                                     domain=['Positive', 'Negative', 'Neutral'],
                                     range=['green', 'red', 'gray']
                                 )),
-                                tooltip=['Sentiment', 'Count', 'Percentage']  # Add tooltip with percentage
+                                tooltip=['Sentiment', 'Count', 'Percentage']
                             ).properties(
                                 width=600,
                                 height=300
                             )
                             
-                            # Add text labels with percentages
                             text = chart.mark_text(
                                 align='left',
                                 baseline='middle',
-                                dx=3  # Nudge text to the right so it doesn't overlap with the bar
+                                dx=3
                             ).encode(
                                 text='Percentage'
                             )
                             
-                            # Combine the chart and text
                             chart_with_text = (chart + text)
-                            
                             st.altair_chart(chart_with_text, use_container_width=True)
                         
                         except Exception as e:
                             st.error(f"Error creating visualization: {str(e)}")
-                            st.write("Fallback to simple text display:")
-                            if isinstance(sentiment_dist, dict):
-                                if "basic" in sentiment_dist:
-                                    st.write(f"Positive: {sentiment_dist['basic'].get('positive', 0)}")
-                                    st.write(f"Negative: {sentiment_dist['basic'].get('negative', 0)}")
-                                    st.write(f"Neutral: {sentiment_dist['basic'].get('neutral', 0)}")
-                                else:
-                                    st.write(f"Positive: {sentiment_dist.get('positive', 0)}")
-                                    st.write(f"Negative: {sentiment_dist.get('negative', 0)}")
-                                    st.write(f"Neutral: {sentiment_dist.get('neutral', 0)}")
-                            else:
-                                st.write("No valid sentiment data available")
                     
                     # Display sentiment indices if available
                     if "sentiment_indices" in analysis and analysis["sentiment_indices"]:
                         st.subheader("Sentiment Indices")
                         
-                        # Debug: Print sentiment indices
-                        print("Sentiment Indices:")
-                        print(json.dumps(analysis["sentiment_indices"], indent=2))
-                        
-                        # Get the indices data
                         indices = analysis["sentiment_indices"]
                         
-                        # Create a very simple visualization that will definitely work
                         try:
                             if isinstance(indices, dict):
-                                # Display as simple metrics in columns
+                                # Display as metrics in columns
                                 cols = st.columns(3)
                                 
-                                # Define display names and descriptions
                                 display_names = {
                                     "positivity_index": "Positivity",
                                     "negativity_index": "Negativity",
@@ -301,22 +323,18 @@ def main():
                                     "esg_relevance": "ESG Relevance"
                                 }
                                 
-                                # Display each index as a metric
                                 for i, (key, value) in enumerate(indices.items()):
                                     if isinstance(value, (int, float)):
                                         with cols[i % 3]:
                                             display_name = display_names.get(key, key.replace("_", " ").title())
                                             st.metric(display_name, f"{value:.2f}")
                                 
-                                # Create a simple bar chart using Altair
-                                
-                                # Create a simple DataFrame
+                                # Create visualization
                                 chart_data = pd.DataFrame({
                                     'Index': [display_names.get(k, k.replace("_", " ").title()) for k in indices.keys()],
                                     'Value': [v if isinstance(v, (int, float)) else 0 for v in indices.values()]
                                 })
                                 
-                                # Create a simple bar chart
                                 chart = alt.Chart(chart_data).mark_bar().encode(
                                     x='Value',
                                     y='Index',
@@ -338,89 +356,107 @@ def main():
                                     - **Confidence**: Confidence in the sentiment analysis (0-1)
                                     - **ESG Relevance**: Relevance to Environmental, Social, and Governance topics (0-1)
                                     """)
-                            else:
-                                st.warning("Sentiment indices data is not in the expected format.")
-                                st.write("No valid sentiment indices available")
                         except Exception as e:
                             st.error(f"Error creating indices visualization: {str(e)}")
-                            st.write("Fallback to simple text display:")
-                            if isinstance(indices, dict):
-                                for key, value in indices.items():
-                                    if isinstance(value, (int, float)):
-                                        st.write(f"{key.replace('_', ' ').title()}: {value:.2f}")
-                            else:
-                                st.write("No valid sentiment indices data available")
                     
-                    # Source Distribution
-                    if "source_distribution" in analysis:
-                        st.subheader("Source Distribution")
-                        source_df = pd.DataFrame.from_dict(
-                            analysis["source_distribution"],
-                            orient='index',
-                            columns=['Count']
-                        )
-                        st.bar_chart(source_df)
+                    # Display Final Analysis
+                    st.header("📊 Final Analysis")
                     
-                    # Common Topics
-                    if "common_topics" in analysis:
-                        st.subheader("Common Topics")
-                        st.write(", ".join(analysis["common_topics"]) if analysis["common_topics"] else "No common topics found")
-                    
-                    # Coverage Differences
-                    if "coverage_differences" in analysis:
-                        st.subheader("Coverage Analysis")
-                        for diff in analysis["coverage_differences"]:
-                            st.write("- " + diff)
-                    
-                    # Display Final Sentiment and Audio
-                    st.header("🎯 Final Analysis")
-                    if "final_sentiment_analysis" in result:
-                        st.write(result["final_sentiment_analysis"])
-                        
-                        # Display sentiment indices in the sidebar if available
-                        if "sentiment_indices" in analysis and analysis["sentiment_indices"]:
-                            indices = analysis["sentiment_indices"]
-                            # Verify we have valid data
-                            if indices and any(isinstance(v, (int, float)) for v in indices.values()):
-                                st.sidebar.markdown("### Sentiment Indices")
-                                for idx_name, idx_value in indices.items():
-                                    if isinstance(idx_value, (int, float)):
-                                        formatted_name = " ".join(word.capitalize() for word in idx_name.replace("_", " ").split())
-                                        st.sidebar.metric(formatted_name, f"{idx_value:.2f}")
-                        
-                        # Display ensemble model information if available
-                        if "ensemble_info" in result:
-                            with st.expander("Ensemble Model Details"):
-                                ensemble = result["ensemble_info"]
-                                
-                                # Model agreement
-                                if "agreement" in ensemble:
-                                    st.metric("Model Agreement", f"{ensemble['agreement']*100:.1f}%")
-                                
-                                # Individual model results
-                                if "models" in ensemble:
-                                    st.subheader("Individual Model Results")
-                                    models_data = []
-                                    for model_name, model_info in ensemble["models"].items():
-                                        models_data.append({
-                                            "Model": model_name,
-                                            "Sentiment": model_info.get("sentiment", "N/A"),
-                                            "Confidence": f"{model_info.get('confidence', 0)*100:.1f}%"
-                                        })
-                                    
-                                    if models_data:
-                                        st.table(pd.DataFrame(models_data))
-                        
-                        # Audio Playback Section
-                        st.subheader("🔊 Listen to Analysis (Hindi)")
-                        if 'audio_content' in result:
-                            st.audio(result['audio_content'], format='audio/mp3')
+                    # Display overall sentiment analysis with enhanced formatting
+                    if data.get("final_sentiment_analysis"):
+                        st.markdown("### Overall Sentiment Analysis")
+                        analysis_parts = data["final_sentiment_analysis"].split(". ")
+                        if len(analysis_parts) >= 2:
+                            # First sentence - Overall sentiment
+                            st.markdown(f"**{analysis_parts[0]}.**")
+                            # Second sentence - Key findings
+                            st.markdown(f"**{analysis_parts[1]}.**")
+                            # Third sentence - Additional insights (if available)
+                            if len(analysis_parts) > 2:
+                                st.markdown(f"**{analysis_parts[2]}.**")
                         else:
-                            st.warning("Hindi audio summary not available")
+                            st.write(data["final_sentiment_analysis"])
+                        
+                        # Add sentiment strength indicator
+                        if data.get("ensemble_info"):
+                            ensemble_info = data["ensemble_info"]
+                            if "model_agreement" in ensemble_info:
+                                agreement = ensemble_info["model_agreement"]
+                                strength = "Strong" if agreement > 0.8 else "Moderate" if agreement > 0.6 else "Weak"
+                                st.markdown(f"**Sentiment Strength:** {strength} (Agreement: {agreement:.2f})")
+                    
+                    # Display ensemble model details
+                    if data.get("ensemble_info"):
+                        st.subheader("Ensemble Model Details")
+                        ensemble_info = data["ensemble_info"]
+                        
+                        # Create columns for model details
+                        model_cols = st.columns(3)
+                        
+                        with model_cols[0]:
+                            st.markdown("**Primary Model:**")
+                            if "models" in ensemble_info and "transformer" in ensemble_info["models"]:
+                                model = ensemble_info["models"]["transformer"]
+                                st.write(f"Sentiment: {model['sentiment']}")
+                                st.write(f"Score: {model['score']:.3f}")
+                        
+                        with model_cols[1]:
+                            st.markdown("**TextBlob Analysis:**")
+                            if "models" in ensemble_info and "textblob" in ensemble_info["models"]:
+                                model = ensemble_info["models"]["textblob"]
+                                st.write(f"Sentiment: {model['sentiment']}")
+                                st.write(f"Score: {model['score']:.3f}")
+                        
+                        with model_cols[2]:
+                            st.markdown("**VADER Analysis:**")
+                            if "models" in ensemble_info and "vader" in ensemble_info["models"]:
+                                model = ensemble_info["models"]["vader"]
+                                st.write(f"Sentiment: {model['sentiment']}")
+                                st.write(f"Score: {model['score']:.3f}")
+                        
+                        # Display ensemble agreement if available
+                        if "model_agreement" in ensemble_info:
+                            st.markdown(f"**Model Agreement:** {ensemble_info['model_agreement']:.3f}")
+                    
+                    # Display Hindi audio player
+                    st.subheader("🔊 Listen to Analysis (Hindi)")
+                    if data.get("audio_path") and os.path.exists(data["audio_path"]):
+                        st.audio(data["audio_path"])
+                    else:
+                        st.info("Generating Hindi audio summary...")
+                        with st.spinner("Please wait while we generate the Hindi audio summary..."):
+                            # Try to generate audio again
+                            translator = get_translator()
+                            if translator and data.get("final_sentiment_analysis"):
+                                try:
+                                    # Translate final analysis to Hindi
+                                    translated_analysis = translator.translate(
+                                        data["final_sentiment_analysis"],
+                                        dest='hi'
+                                    ).text
+                                    
+                                    # Generate Hindi audio
+                                    tts_converter = TextToSpeechConverter()
+                                    audio_path = tts_converter.generate_audio(
+                                        translated_analysis,
+                                        f'{company}_summary'
+                                    )
+                                    if audio_path and os.path.exists(audio_path):
+                                        st.audio(audio_path)
+                                    else:
+                                        st.error("Hindi audio summary not available")
+                                except Exception as e:
+                                    st.error(f"Error generating Hindi audio: {str(e)}")
+                            else:
+                                st.error("Hindi audio summary not available")
                     
                     # Total Articles
                     if "total_articles" in analysis:
                         st.sidebar.info(f"Found {analysis['total_articles']} articles")
+                
+                except Exception as e:
+                    st.error(f"Error analyzing company data: {str(e)}")
+                    print(f"Error: {str(e)}")
 
     # Add a disclaimer
     st.sidebar.markdown("---")

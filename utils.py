@@ -13,19 +13,143 @@ import re
 from datetime import datetime, timedelta
 import time
 import json
-from googletrans import Translator
+from googletrans import Translator, LANGUAGES
 import statistics
+
+def analyze_company_data(company_name: str) -> Dict[str, Any]:
+    """Analyze company news and generate insights."""
+    try:
+        # Initialize components
+        news_extractor = NewsExtractor()
+        sentiment_analyzer = SentimentAnalyzer()
+        text_summarizer = TextSummarizer()
+        comparative_analyzer = ComparativeAnalyzer()
+        
+        # Get news articles
+        articles = news_extractor.search_news(company_name)
+        
+        if not articles:
+            return {
+                "articles": [],
+                "comparative_sentiment_score": {},
+                "final_sentiment_analysis": "No articles found for analysis.",
+                "audio_path": None
+            }
+        
+        # Process each article
+        processed_articles = []
+        sentiment_scores = {}
+        
+        for article in articles:
+            # Generate summary
+            summary = text_summarizer.summarize(article['content'])
+            article['summary'] = summary
+            
+            # Analyze overall sentiment
+            sentiment = sentiment_analyzer.analyze(article['content'])
+            article['sentiment'] = sentiment
+            
+            # Analyze fine-grained sentiment
+            try:
+                fine_grained_results = sentiment_analyzer._get_fine_grained_sentiment(article['content'])
+                article['fine_grained_sentiment'] = fine_grained_results
+                
+                # Add sentiment indices
+                sentiment_indices = sentiment_analyzer._calculate_sentiment_indices(fine_grained_results)
+                article['sentiment_indices'] = sentiment_indices
+                
+                # Add entities and sentiment targets
+                entities = sentiment_analyzer._extract_entities(article['content'])
+                article['entities'] = entities
+                
+                sentiment_targets = sentiment_analyzer._extract_sentiment_targets(article['content'], entities)
+                article['sentiment_targets'] = sentiment_targets
+                
+            except Exception as e:
+                print(f"Error in fine-grained sentiment analysis: {str(e)}")
+            
+            # Track sentiment by source
+            source = article['source']
+            if source not in sentiment_scores:
+                sentiment_scores[source] = []
+            sentiment_scores[source].append(sentiment)
+            
+            processed_articles.append(article)
+        
+        # Calculate overall sentiment
+        overall_sentiment = sentiment_analyzer.get_overall_sentiment(processed_articles)
+        
+        # Ensure consistent array lengths in sentiment_scores
+        max_length = max(len(scores) for scores in sentiment_scores.values())
+        for source in sentiment_scores:
+            # Pad shorter arrays with 'neutral' to match the longest array
+            sentiment_scores[source].extend(['neutral'] * (max_length - len(sentiment_scores[source])))
+        
+        # Get comparative analysis
+        comparative_analysis = comparative_analyzer.analyze_coverage(processed_articles, company_name)
+        
+        # Combine all results
+        result = {
+            "articles": processed_articles,
+            "comparative_sentiment_score": {
+                "sentiment_distribution": comparative_analysis.get("sentiment_distribution", {}),
+                "sentiment_indices": comparative_analysis.get("sentiment_indices", {}),
+                "source_distribution": comparative_analysis.get("source_distribution", {}),
+                "common_topics": comparative_analysis.get("common_topics", []),
+                "coverage_differences": comparative_analysis.get("coverage_differences", []),
+                "total_articles": len(processed_articles)
+            },
+            "final_sentiment_analysis": overall_sentiment,
+            "ensemble_info": sentiment_analyzer._get_ensemble_sentiment("\n".join([a['content'] for a in processed_articles])),
+            "audio_path": None
+        }
+        
+        return result
+        
+    except Exception as e:
+        print(f"Error analyzing company data: {str(e)}")
+        return {
+            "articles": [],
+            "comparative_sentiment_score": {},
+            "final_sentiment_analysis": f"Error during analysis: {str(e)}",
+            "audio_path": None
+        }
+
+# Initialize translator with retry mechanism
+def get_translator():
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            translator = Translator()
+            # Test the translator
+            translator.translate('test', dest='en')
+            return translator
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"Failed to initialize translator after {max_retries} attempts: {str(e)}")
+                return None
+            time.sleep(1)  # Wait before retrying
+    return None
 
 class NewsExtractor:
     def __init__(self):
         self.headers = HEADERS
+        self.start_time = None
+        self.timeout = 30  # 30 seconds timeout
 
     def search_news(self, company_name: str) -> List[Dict[str, str]]:
         """Extract news articles about the company ensuring minimum count."""
+        self.start_time = time.time()
         all_articles = []
         retries = 2  # Number of retries if we don't get enough articles
+        min_articles = MIN_ARTICLES  # Start with default minimum
         
-        while retries > 0 and len(all_articles) < MIN_ARTICLES:
+        while retries > 0 and len(all_articles) < min_articles:
+            # Check for timeout
+            if time.time() - self.start_time > self.timeout:
+                print(f"\nTimeout reached after {self.timeout} seconds. Proceeding with available articles.")
+                break
+                
             for source, url_template in NEWS_SOURCES.items():
                 try:
                     url = url_template.format(company_name.replace(" ", "+"))
@@ -33,6 +157,10 @@ class NewsExtractor:
                     
                     # Try different page numbers for more articles
                     for page in range(2):  # Try first two pages
+                        # Check for timeout again
+                        if time.time() - self.start_time > self.timeout:
+                            break
+                            
                         page_url = url
                         if page > 0:
                             if source == "google":
@@ -84,7 +212,7 @@ class NewsExtractor:
                             print(f"Found {len(source_articles)} articles from {source} page {page+1}")
                         
                         # If we have enough articles, break the page loop
-                        if len(all_articles) >= MIN_ARTICLES:
+                        if len(all_articles) >= min_articles:
                             break
                             
                 except Exception as e:
@@ -92,12 +220,16 @@ class NewsExtractor:
                     continue
                 
                 # If we have enough articles, break the source loop
-                if len(all_articles) >= MIN_ARTICLES:
+                if len(all_articles) >= min_articles:
                     break
             
             retries -= 1
-            if len(all_articles) < MIN_ARTICLES and retries > 0:
+            if len(all_articles) < min_articles and retries > 0:
                 print(f"\nFound only {len(all_articles)} articles, retrying...")
+                # Lower the minimum requirement if we're close
+                if len(all_articles) >= 15:  # If we have at least 15 articles
+                    min_articles = len(all_articles)
+                    print(f"Adjusting minimum requirement to {min_articles} articles")
         
         # Remove duplicates
         unique_articles = self._remove_duplicates(all_articles)
@@ -105,10 +237,11 @@ class NewsExtractor:
         
         if len(unique_articles) < MIN_ARTICLES:
             print(f"Warning: Could only find {len(unique_articles)} unique articles, fewer than minimum {MIN_ARTICLES}")
+            print("Proceeding with available articles...")
         
         # Balance articles across sources
         balanced_articles = self._balance_sources(unique_articles)
-        return balanced_articles[:max(MIN_ARTICLES, MAX_ARTICLES)]
+        return balanced_articles[:max(len(unique_articles), MAX_ARTICLES)]
 
     def _balance_sources(self, articles: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Balance articles across sources while maintaining minimum count."""
@@ -404,6 +537,32 @@ class SentimentAnalyzer:
             self.has_ner = False
             self.has_textblob = False
             self.has_vader = False
+
+    def analyze(self, text: str) -> str:
+        """Analyze sentiment of text and return sentiment label."""
+        try:
+            # Get ensemble sentiment analysis
+            sentiment_analysis = self._get_ensemble_sentiment(text)
+            return sentiment_analysis['ensemble_sentiment']
+        except Exception as e:
+            print(f"Error in sentiment analysis: {str(e)}")
+            return 'neutral'  # Default to neutral on error
+
+    def get_overall_sentiment(self, articles: List[Dict[str, Any]]) -> str:
+        """Get overall sentiment from a list of articles."""
+        try:
+            # Combine all article texts
+            combined_text = ' '.join([
+                f"{article.get('title', '')} {article.get('content', '')}"
+                for article in articles
+            ])
+            
+            # Get ensemble sentiment analysis
+            sentiment_analysis = self._get_ensemble_sentiment(combined_text)
+            return sentiment_analysis['ensemble_sentiment']
+        except Exception as e:
+            print(f"Error getting overall sentiment: {str(e)}")
+            return 'neutral'  # Default to neutral on error
 
     def analyze_article(self, article: Dict[str, str]) -> Dict[str, Any]:
         """Analyze sentiment and generate summary for an article."""
@@ -805,15 +964,24 @@ class SentimentAnalyzer:
             # Clean and prepare text
             text = text.replace('\n', ' ').strip()
             
+            # For very short texts, return as is
+            if len(text.split()) < 30:
+                return text
+            
             # Split text into chunks if it's too long
             chunks = self._split_text(text)
             
             summaries = []
             for chunk in chunks:
+                # Calculate appropriate max_length based on input length
+                input_words = len(chunk.split())
+                max_length = min(130, max(30, input_words // 2))
+                min_length = min(30, max(10, input_words // 4))
+                
                 # Generate summary for each chunk
                 summary = self.summarizer(chunk, 
-                                       max_length=130, 
-                                       min_length=30, 
+                                       max_length=max_length, 
+                                       min_length=min_length, 
                                        do_sample=False)[0]['summary_text']
                 summaries.append(summary)
             
@@ -960,10 +1128,77 @@ class SentimentAnalyzer:
             print(f"Error extracting sentiment targets: {str(e)}")
             return []
 
+class TextSummarizer:
+    def __init__(self):
+        try:
+            # Initialize the summarization pipeline
+            self.summarizer = pipeline("summarization", model=SUMMARIZATION_MODEL)
+        except Exception as e:
+            print(f"Error initializing TextSummarizer: {str(e)}")
+            # Fallback to default model if specific model fails
+            self.summarizer = pipeline("summarization")
+
+    def summarize(self, text: str) -> str:
+        """Generate a concise summary of the text."""
+        try:
+            # Clean and prepare text
+            text = text.replace('\n', ' ').strip()
+            
+            # For very short texts, return as is
+            if len(text.split()) < 30:
+                return text
+            
+            # Split text into chunks if it's too long
+            chunks = self._split_text(text)
+            
+            summaries = []
+            for chunk in chunks:
+                # Calculate appropriate max_length based on input length
+                input_words = len(chunk.split())
+                max_length = min(130, max(30, input_words // 2))
+                min_length = min(30, max(10, input_words // 4))
+                
+                # Generate summary for each chunk
+                summary = self.summarizer(chunk, 
+                                       max_length=max_length, 
+                                       min_length=min_length, 
+                                       do_sample=False)[0]['summary_text']
+                summaries.append(summary)
+            
+            # Combine summaries if there were multiple chunks
+            final_summary = ' '.join(summaries)
+            return final_summary
+            
+        except Exception as e:
+            print(f"Error generating summary: {str(e)}")
+            return text[:200] + '...'  # Return truncated text as fallback
+
+    def _split_text(self, text: str, max_length: int = 1024) -> List[str]:
+        """Split text into chunks that fit within model's maximum token limit."""
+        words = text.split()
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        
+        for word in words:
+            word_length = len(word) + 1  # +1 for space
+            if current_length + word_length > max_length:
+                chunks.append(' '.join(current_chunk))
+                current_chunk = [word]
+                current_length = word_length
+            else:
+                current_chunk.append(word)
+                current_length += word_length
+        
+        if current_chunk:
+            chunks.append(' '.join(current_chunk))
+            
+        return chunks
+
 class TextToSpeechConverter:
     def __init__(self):
         self.output_dir = AUDIO_OUTPUT_DIR
-        self.translator = Translator()
+        self.translator = get_translator()
         os.makedirs(self.output_dir, exist_ok=True)
     
     def generate_audio(self, text: str, filename: str) -> str:
